@@ -56,6 +56,8 @@ body {
 
 button {
 	font-family: inherit;
+	/* iOS Safari paints unstyled button text in its system blue; color does not inherit on buttons */
+	color: inherit;
 	cursor: pointer;
 }
 
@@ -413,7 +415,8 @@ button {
 	left: 0;
 	right: 0;
 	bottom: 0;
-	z-index: 570;
+	/* Above the FABs (580): they belong to the map and the expanded sheet must cover them */
+	z-index: 585;
 	max-width: 620px;
 	margin: 0 auto;
 	background: var(--paper);
