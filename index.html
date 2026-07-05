@@ -4,8 +4,116 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 		<meta name="theme-color" content="#faf7f2" />
-		<meta name="description" content="Last Mile — guarda y busca direcciones que no aparecen en el mapa" />
-		<title>Last Mile</title>
+		<meta name="description" content="Last Mile — guarda y encuentra direcciones rurales, partidas y caminos que no salen en el mapa. Herramienta offline para repartidores en zonas dispersas." />
+		<title>Last Mile — Direcciones rurales para reparto</title>
+			<link
+				rel="canonical"
+				href="https://lastmile.chemaalfonso.com/"
+			/>
+
+			<!-- PWA -->
+			<link
+				rel="manifest"
+				href="manifest.json"
+			/>
+			<meta
+				name="mobile-web-app-capable"
+				content="yes"
+			/>
+			<meta
+				name="apple-mobile-web-app-capable"
+				content="yes"
+			/>
+			<meta
+				name="apple-mobile-web-app-status-bar-style"
+				content="default"
+			/>
+			<meta
+				name="apple-mobile-web-app-title"
+				content="Last Mile"
+			/>
+			<link
+				rel="apple-touch-icon"
+				href="assets/apple-touch-icon.png"
+			/>
+
+			<!-- Open Graph -->
+			<meta
+				property="og:title"
+				content="Last Mile — Direcciones rurales para reparto"
+			/>
+			<meta
+				property="og:description"
+				content="Guarda y encuentra direcciones rurales, partidas y caminos que no salen en el mapa. Herramienta offline para repartidores."
+			/>
+			<meta
+				property="og:type"
+				content="website"
+			/>
+			<meta
+				property="og:url"
+				content="https://lastmile.chemaalfonso.com/"
+			/>
+			<meta
+				property="og:site_name"
+				content="Last Mile"
+			/>
+			<meta
+				property="og:locale"
+				content="es_ES"
+			/>
+			<meta
+				property="og:image"
+				content="https://lastmile.chemaalfonso.com/assets/og.png"
+			/>
+			<meta
+				property="og:image:width"
+				content="1200"
+			/>
+			<meta
+				property="og:image:height"
+				content="630"
+			/>
+
+			<!-- Twitter -->
+			<meta
+				name="twitter:card"
+				content="summary_large_image"
+			/>
+			<meta
+				name="twitter:title"
+				content="Last Mile — Direcciones rurales para reparto"
+			/>
+			<meta
+				name="twitter:description"
+				content="Guarda y encuentra direcciones rurales, partidas y caminos que no salen en el mapa. Herramienta offline para repartidores."
+			/>
+			<meta
+				name="twitter:image"
+				content="https://lastmile.chemaalfonso.com/assets/og.png"
+			/>
+
+			<script type="application/ld+json">
+				{
+					"@context": "https://schema.org",
+					"@type": "WebApplication",
+					"name": "Last Mile",
+					"url": "https://lastmile.chemaalfonso.com/",
+					"description": "Guarda y encuentra direcciones rurales, partidas y caminos que no salen en el mapa. Herramienta offline para repartidores en zonas dispersas.",
+					"applicationCategory": "UtilitiesApplication",
+					"operatingSystem": "Web",
+					"inLanguage": "es",
+					"author": {
+						"@type": "Person",
+						"name": "Chema Alfonso"
+					},
+					"publisher": {
+						"@type": "Organization",
+						"name": "Kraken Labs Web",
+						"url": "https://krakenlabsweb.com"
+					}
+				}
+			</script>
 		<link
 			rel="icon"
 			href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a1714'/%3E%3Cpath d='M16 6c-4.4 0-8 3.4-8 7.6C8 19.6 16 26 16 26s8-6.4 8-12.4C24 9.4 20.4 6 16 6z' fill='%23e8500a'/%3E%3Ccircle cx='16' cy='13.4' r='2.8' fill='%231a1714'/%3E%3C/svg%3E"
@@ -35,6 +143,120 @@
 		/>
 	</head>
 	<body>
+		<!-- Splash / landing (brand moment, shown on every load) -->
+		<div
+			id="splash"
+			class="splash"
+			role="dialog"
+			aria-label="Bienvenida a Last Mile"
+		>
+			<div class="splash__inner">
+				<div class="splash__item brand">
+					<img
+						class="brand__aro"
+						src="assets/kraken.png"
+						alt="Kraken Labs Web"
+						width="72"
+						height="72"
+					/>
+					<span class="brand__lines">
+						<span class="brand__name">Kraken Labs</span>
+						<span class="brand__tag">Creative Web Design</span>
+					</span>
+				</div>
+
+				<div
+					class="splash__item splash__divider"
+					aria-hidden="true"
+				></div>
+
+				<div class="splash__item splash__app">
+					<h1 class="splash__title">Last Mile</h1>
+					<p class="splash__tagline">Direcciones rurales que no aparecen en el mapa</p>
+				</div>
+
+				<button
+					id="splashStart"
+					class="splash__item btn btn--primary splash__start"
+					type="button"
+				>
+					Iniciar
+				</button>
+
+				<footer class="splash__item splash__footer">
+					<p class="splash__credit">
+						Desarrollado por
+						<a
+							href="https://krakenlabsweb.com"
+							target="_blank"
+							rel="noopener"
+							>Chema Alfonso</a
+						>
+					</p>
+					<div class="splash__contact">
+						<a
+							class="iconlink"
+							href="https://wa.me/34622409597"
+							target="_blank"
+							rel="noopener"
+							aria-label="Escríbenos por WhatsApp"
+						>
+							<svg
+								viewBox="0 0 24 24"
+								aria-hidden="true"
+							>
+								<path
+									d="M3.5 20.5l1.3-3.8a7.5 7.5 0 1 1 2.9 2.8z"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+								/>
+								<path
+									d="M9.2 8.5c.2-.4.4-.4.6-.4h.5c.2 0 .4 0 .5.4l.7 1.6c.1.2 0 .4-.1.5l-.5.5c-.1.1-.1.3 0 .5.4.7 1.3 1.5 2 1.9.2.1.4.1.5-.1l.4-.5c.2-.2.3-.2.5-.1l1.5.7c.2.1.3.2.3.4 0 .5-.2 1.1-.5 1.3-.4.3-.9.5-2.2.1-1.8-.5-3.6-2.2-4.5-4-.6-1.1-.5-1.9-.3-2.7z"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="1.6"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+								/>
+							</svg>
+						</a>
+						<a
+							class="iconlink"
+							href="mailto:hola@chemaalfonso.com"
+							aria-label="Escríbenos un correo"
+						>
+							<svg
+								viewBox="0 0 24 24"
+								aria-hidden="true"
+							>
+								<rect
+									x="3"
+									y="5.5"
+									width="18"
+									height="13"
+									rx="2"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+								/>
+								<path
+									d="M4 7.5l8 5.5 8-5.5"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+								/>
+							</svg>
+						</a>
+					</div>
+				</footer>
+			</div>
+		</div>
+
 		<div
 			id="map"
 			role="application"
@@ -255,25 +477,34 @@
 				>
 					<div class="listbar">
 						<button
-							id="exportBtn"
+							id="settingsBtn"
 							class="btn btn--sm"
 							type="button"
 						>
-							Exportar
+							<svg
+								viewBox="0 0 24 24"
+								aria-hidden="true"
+								width="18"
+								height="18"
+							>
+								<circle
+									cx="12"
+									cy="12"
+									r="3.2"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+								/>
+								<path
+									d="M12 2.5v3M12 18.5v3M21.5 12h-3M5.5 12h-3M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1M18.7 18.7l-2.1-2.1M7.4 7.4 5.3 5.3"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+								/>
+							</svg>
+							Ajustes
 						</button>
-						<button
-							id="importBtn"
-							class="btn btn--sm"
-							type="button"
-						>
-							Importar
-						</button>
-						<input
-							id="importInput"
-							type="file"
-							accept="application/json,.json"
-							hidden
-						/>
 					</div>
 					<ul
 						id="list"
@@ -357,8 +588,106 @@
 						</button>
 					</div>
 				</form>
+
+				<!-- Settings view -->
+				<div
+					id="settingsView"
+					class="view settings"
+					hidden
+				>
+					<div class="settings__head">
+						<h2 class="form__title">Ajustes</h2>
+						<button
+							id="settingsBack"
+							class="btn btn--ghost btn--sm"
+							type="button"
+						>
+							Volver
+						</button>
+					</div>
+
+					<section class="settings__group">
+						<h3 class="settings__label">Poblaciones</h3>
+						<div
+							id="datosList"
+							class="datos__list"
+						></div>
+						<p class="datos__hint">La visibilidad controla el mapa y la búsqueda de cada población.</p>
+					</section>
+
+					<section class="settings__group">
+						<h3 class="settings__label">Copia de seguridad</h3>
+						<div class="listbar listbar--static">
+							<button
+								id="exportBtn"
+								class="btn btn--sm"
+								type="button"
+							>
+								Exportar
+							</button>
+							<button
+								id="importBtn"
+								class="btn btn--sm"
+								type="button"
+							>
+								Importar
+							</button>
+							<input
+								id="importInput"
+								type="file"
+								accept="application/json,.json"
+								hidden
+							/>
+						</div>
+					</section>
+				</div>
 			</div>
 		</section>
+
+		<!-- First-run onboarding (shown once, only when no town is downloaded) -->
+		<div
+			id="onboard"
+			class="onboard"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="onboardTitle"
+			hidden
+		>
+			<div class="onboard__card">
+				<div
+					class="onboard__stripe"
+					aria-hidden="true"
+				></div>
+				<div class="onboard__body">
+					<h2
+						id="onboardTitle"
+						class="onboard__title"
+					>
+						Descarga tu zona de reparto
+					</h2>
+					<p class="onboard__text">
+						La app incluye las casas de campo oficiales de cada población (datos del Catastro). Descarga tu
+						zona para verlas en el mapa y el buscador.
+					</p>
+					<div class="onboard__actions">
+						<button
+							id="onboardDismiss"
+							class="btn btn--ghost"
+							type="button"
+						>
+							Ahora no
+						</button>
+						<button
+							id="onboardSettings"
+							class="btn btn--primary"
+							type="button"
+						>
+							Abrir ajustes
+						</button>
+					</div>
+				</div>
+			</div>
+		</div>
 
 		<!-- Toasts -->
 		<div

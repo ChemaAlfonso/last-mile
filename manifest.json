@@ -1,0 +1,33 @@
+{
+	"name": "Last Mile",
+	"short_name": "Last Mile",
+	"description": "Guarda y encuentra direcciones rurales, partidas y caminos que no salen en el mapa. Herramienta offline para repartidores.",
+	"lang": "es",
+	"dir": "ltr",
+	"start_url": "./",
+	"scope": "./",
+	"display": "standalone",
+	"orientation": "portrait",
+	"background_color": "#faf7f2",
+	"theme_color": "#faf7f2",
+	"icons": [
+		{
+			"src": "assets/icon-192.png",
+			"sizes": "192x192",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "assets/icon-512.png",
+			"sizes": "512x512",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "assets/icon-maskable.png",
+			"sizes": "512x512",
+			"type": "image/png",
+			"purpose": "maskable"
+		}
+	]
+}

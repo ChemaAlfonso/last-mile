@@ -276,6 +276,12 @@ button {
 	border-color: var(--accent);
 }
 
+.badge--town {
+	color: var(--accent);
+	background: var(--accent-soft);
+	border-color: var(--accent);
+}
+
 /* ---------- Banner ---------- */
 
 .banner {
@@ -572,6 +578,152 @@ button {
 .card__actions .btn {
 	flex: 1 1 auto;
 	min-width: 72px;
+}
+
+/* ---------- Settings view ---------- */
+
+.settings__head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	margin-bottom: 6px;
+}
+
+.settings__head .form__title {
+	margin: 4px 0;
+}
+
+.settings__group {
+	margin-bottom: 18px;
+}
+
+.settings__label {
+	margin: 0 0 8px;
+	font-family: 'Barlow Condensed', sans-serif;
+	font-size: 14px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.07em;
+	color: var(--ink-soft);
+}
+
+.listbar--static {
+	position: static;
+	padding: 0;
+}
+
+/* ---------- Datos (official datasets) ---------- */
+
+.datos__list {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.datos__hint {
+	margin: 10px 0 0;
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.datos-row {
+	padding: 10px;
+	background: var(--paper);
+	border: var(--border) solid var(--line);
+	border-radius: var(--radius);
+}
+
+.datos-row__head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.datos-row__main {
+	flex: 1;
+	min-width: 0;
+}
+
+.datos-row__name {
+	font-family: 'Barlow Condensed', sans-serif;
+	font-size: 17px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+	line-height: 1.1;
+}
+
+.datos-row__sub {
+	margin-top: 2px;
+	font-size: 13px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.datos-row__actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 10px;
+}
+
+.datos-row__actions .btn {
+	flex: 1 1 auto;
+	min-width: 90px;
+}
+
+/* ---------- Toggle switch ---------- */
+
+.toggle {
+	flex: none;
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	cursor: pointer;
+}
+
+.toggle__input {
+	position: absolute;
+	opacity: 0;
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	cursor: pointer;
+}
+
+.toggle__track {
+	display: block;
+	width: 50px;
+	height: 28px;
+	background: var(--paper-2);
+	border: var(--border) solid var(--line);
+	border-radius: 999px;
+	transition: background 0.16s var(--ease);
+}
+
+.toggle__thumb {
+	display: block;
+	width: 20px;
+	height: 20px;
+	margin: 2px;
+	background: var(--ink);
+	border-radius: 50%;
+	transition: transform 0.16s var(--ease), background 0.16s var(--ease);
+}
+
+.toggle__input:checked + .toggle__track {
+	background: var(--accent);
+}
+
+.toggle__input:checked + .toggle__track .toggle__thumb {
+	transform: translateX(22px);
+	background: var(--accent-ink);
+}
+
+.toggle__input:focus-visible + .toggle__track {
+	outline: 3px solid var(--accent);
+	outline-offset: 2px;
 }
 
 /* ---------- Empty state ---------- */
@@ -879,6 +1031,25 @@ button {
 	font-size: 13px;
 }
 
+.popup__meta {
+	margin: 2px 0 0;
+	font-size: 12px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.popup__flag {
+	margin-left: 6px;
+	padding: 1px 6px;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	color: var(--accent-ink);
+	background: var(--accent);
+	border-radius: 3px;
+	vertical-align: middle;
+}
+
 .popup__actions {
 	display: flex;
 	gap: 6px;
@@ -902,5 +1073,312 @@ button {
 @media (min-width: 640px) {
 	.search {
 		top: calc(16px + var(--safe-top));
+	}
+}
+
+/* ---------- Splash / landing ---------- */
+
+.splash {
+	position: fixed;
+	inset: 0;
+	z-index: 2000;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	overflow-y: auto;
+	background: var(--paper);
+	padding: calc(28px + var(--safe-top)) calc(24px + var(--safe-right)) calc(28px + var(--safe-bottom))
+		calc(24px + var(--safe-left));
+	transition: opacity 0.36s var(--ease), transform 0.36s var(--ease);
+}
+
+/* Faint field-map grid so the paper reads as a chart, not a blank sheet */
+.splash::before {
+	content: '';
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	background-image: linear-gradient(to right, rgba(26, 23, 20, 0.045) 1px, transparent 1px),
+		linear-gradient(to bottom, rgba(26, 23, 20, 0.045) 1px, transparent 1px);
+	background-size: 34px 34px;
+}
+
+.splash--hidden {
+	opacity: 0;
+	transform: scale(1.03);
+	pointer-events: none;
+}
+
+.splash__inner {
+	position: relative;
+	width: 100%;
+	max-width: 420px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 26px;
+	text-align: center;
+}
+
+.splash__item {
+	/* backwards keeps the pre-delay state hidden, then hands transform back so :active still works */
+	animation: splashIn 0.5s var(--ease) backwards;
+}
+
+.splash__item:nth-child(1) {
+	animation-delay: 0.05s;
+}
+
+.splash__item:nth-child(2) {
+	animation-delay: 0.13s;
+}
+
+.splash__item:nth-child(3) {
+	animation-delay: 0.21s;
+}
+
+.splash__item:nth-child(4) {
+	animation-delay: 0.29s;
+}
+
+.splash__item:nth-child(5) {
+	animation-delay: 0.37s;
+}
+
+@keyframes splashIn {
+	from {
+		opacity: 0;
+		transform: translateY(14px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+/* Kraken Labs Web brand block */
+.brand {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+}
+
+.brand__aro {
+	width: 64px;
+	height: 64px;
+	flex: none;
+}
+
+.brand__lines {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	line-height: 1;
+}
+
+.brand__name {
+	font-family: 'Barlow Condensed', sans-serif;
+	font-size: 30px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	color: var(--ink);
+}
+
+.brand__tag {
+	margin-top: 5px;
+	font-size: 12px;
+	font-weight: 500;
+	text-transform: uppercase;
+	letter-spacing: 0.22em;
+	color: var(--muted);
+}
+
+.splash__divider {
+	width: 100%;
+	max-width: 260px;
+	height: 10px;
+	border: var(--border) solid var(--line);
+	border-radius: 3px;
+	background-image: repeating-linear-gradient(
+		45deg,
+		var(--accent) 0,
+		var(--accent) 9px,
+		var(--ink) 9px,
+		var(--ink) 18px
+	);
+}
+
+.splash__app {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+}
+
+.splash__title {
+	margin: 0;
+	font-family: 'Barlow Condensed', sans-serif;
+	font-size: clamp(58px, 19vw, 86px);
+	font-weight: 700;
+	line-height: 0.9;
+	text-transform: uppercase;
+	letter-spacing: 0.01em;
+	color: var(--ink);
+}
+
+.splash__tagline {
+	margin: 0;
+	max-width: 300px;
+	font-size: 17px;
+	font-weight: 500;
+	color: var(--ink-soft);
+}
+
+.splash__start {
+	width: 100%;
+	max-width: 320px;
+	min-height: 58px;
+	font-size: 20px;
+	box-shadow: var(--shadow);
+}
+
+.splash__footer {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 12px;
+	margin-top: 2px;
+}
+
+.splash__credit {
+	margin: 0;
+	font-size: 14px;
+	color: var(--muted);
+}
+
+.splash__credit a {
+	color: var(--accent);
+	font-weight: 600;
+	text-decoration: none;
+}
+
+.splash__contact {
+	display: flex;
+	gap: 12px;
+}
+
+.iconlink {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 46px;
+	height: 46px;
+	color: var(--ink);
+	background: var(--paper);
+	border: var(--border) solid var(--line);
+	border-radius: 50%;
+	box-shadow: var(--shadow-sm);
+	transition: transform 0.08s var(--ease), box-shadow 0.08s var(--ease), background 0.12s;
+}
+
+.iconlink:active {
+	transform: translate(2px, 2px);
+	box-shadow: 0 0 0 var(--ink);
+}
+
+.iconlink:hover {
+	background: var(--accent-soft);
+}
+
+.iconlink svg {
+	width: 24px;
+	height: 24px;
+}
+
+/* ---------- Onboarding modal ---------- */
+
+.onboard {
+	position: fixed;
+	inset: 0;
+	z-index: 1500;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: calc(20px + var(--safe-top)) calc(20px + var(--safe-right)) calc(20px + var(--safe-bottom))
+		calc(20px + var(--safe-left));
+	background: rgba(26, 23, 20, 0.4);
+}
+
+.onboard__card {
+	position: relative;
+	width: 100%;
+	max-width: 380px;
+	overflow: hidden;
+	background: var(--paper);
+	border: var(--border) solid var(--line);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow);
+	animation: onboardPop 0.24s var(--ease);
+}
+
+.onboard__stripe {
+	height: 10px;
+	background-image: repeating-linear-gradient(
+		45deg,
+		var(--accent) 0,
+		var(--accent) 9px,
+		var(--ink) 9px,
+		var(--ink) 18px
+	);
+}
+
+.onboard__body {
+	padding: 16px 18px 18px;
+}
+
+.onboard__title {
+	margin: 0 0 8px;
+	font-family: 'Barlow Condensed', sans-serif;
+	font-size: 24px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--ink);
+}
+
+.onboard__text {
+	margin: 0 0 16px;
+	font-size: 15px;
+	line-height: 1.4;
+	color: var(--ink-soft);
+}
+
+.onboard__actions {
+	display: flex;
+	gap: 10px;
+}
+
+.onboard__actions .btn {
+	flex: 1;
+}
+
+@keyframes onboardPop {
+	from {
+		opacity: 0;
+		transform: translateY(12px) scale(0.98);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0) scale(1);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.splash,
+	.splash__item,
+	.onboard__card {
+		transition: none;
+		animation: none;
 	}
 }
