@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="es">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<meta name="theme-color" content="#faf7f2" />
+		<meta name="description" content="Last Mile — guarda y busca direcciones que no aparecen en el mapa" />
+		<title>Last Mile</title>
+		<link
+			rel="icon"
+			href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a1714'/%3E%3Cpath d='M16 6c-4.4 0-8 3.4-8 7.6C8 19.6 16 26 16 26s8-6.4 8-12.4C24 9.4 20.4 6 16 6z' fill='%23e8500a'/%3E%3Ccircle cx='16' cy='13.4' r='2.8' fill='%231a1714'/%3E%3C/svg%3E"
+		/>
+		<link
+			rel="preconnect"
+			href="https://fonts.googleapis.com"
+		/>
+		<link
+			rel="preconnect"
+			href="https://fonts.gstatic.com"
+			crossorigin
+		/>
+		<link
+			href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap"
+			rel="stylesheet"
+		/>
+		<link
+			rel="stylesheet"
+			href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+			integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+			crossorigin=""
+		/>
+		<link
+			rel="stylesheet"
+			href="styles.css"
+		/>
+	</head>
+	<body>
+		<div
+			id="map"
+			role="application"
+			aria-label="Mapa"
+		></div>
+
+		<!-- Top floating search -->
+		<header class="search">
+			<div class="search__bar">
+				<svg
+					class="search__icon"
+					viewBox="0 0 24 24"
+					aria-hidden="true"
+				>
+					<circle
+						cx="11"
+						cy="11"
+						r="7"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2.5"
+					/>
+					<line
+						x1="16.5"
+						y1="16.5"
+						x2="21"
+						y2="21"
+						stroke="currentColor"
+						stroke-width="2.5"
+						stroke-linecap="round"
+					/>
+				</svg>
+				<input
+					id="searchInput"
+					class="search__input"
+					type="text"
+					inputmode="search"
+					autocomplete="off"
+					placeholder="Buscar dirección o lugar…"
+					aria-label="Buscar dirección o lugar"
+				/>
+				<button
+					id="searchClear"
+					class="search__clear"
+					type="button"
+					aria-label="Limpiar búsqueda"
+					hidden
+				>
+					&times;
+				</button>
+			</div>
+			<div
+				id="results"
+				class="results"
+				role="listbox"
+				aria-label="Resultados de búsqueda"
+				hidden
+			></div>
+		</header>
+
+		<!-- Placement mode banner -->
+		<div
+			id="placementBanner"
+			class="banner"
+			role="status"
+			hidden
+		>
+			<div class="banner__stripe"></div>
+			<div class="banner__body">
+				<p class="banner__text">Toca el mapa para fijar el punto o usa tu GPS</p>
+				<div class="banner__actions">
+					<button
+						id="placementGps"
+						class="btn btn--ghost"
+						type="button"
+					>
+						Usar GPS
+					</button>
+					<button
+						id="placementCancel"
+						class="btn btn--ghost"
+						type="button"
+					>
+						Cancelar
+					</button>
+				</div>
+			</div>
+		</div>
+
+		<!-- Floating action buttons -->
+		<div class="fabs">
+			<button
+				id="locateBtn"
+				class="fab fab--secondary"
+				type="button"
+				aria-label="Centrar en mi ubicación"
+			>
+				<svg
+					viewBox="0 0 24 24"
+					aria-hidden="true"
+				>
+					<circle
+						cx="12"
+						cy="12"
+						r="4"
+						fill="currentColor"
+					/>
+					<circle
+						cx="12"
+						cy="12"
+						r="8"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+					/>
+					<line
+						x1="12"
+						y1="1"
+						x2="12"
+						y2="4"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+					/>
+					<line
+						x1="12"
+						y1="20"
+						x2="12"
+						y2="23"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+					/>
+					<line
+						x1="1"
+						y1="12"
+						x2="4"
+						y2="12"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+					/>
+					<line
+						x1="20"
+						y1="12"
+						x2="23"
+						y2="12"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+					/>
+				</svg>
+			</button>
+			<button
+				id="addBtn"
+				class="fab fab--primary"
+				type="button"
+				aria-label="Añadir dirección"
+			>
+				<svg
+					viewBox="0 0 24 24"
+					aria-hidden="true"
+				>
+					<line
+						x1="12"
+						y1="5"
+						x2="12"
+						y2="19"
+						stroke="currentColor"
+						stroke-width="3"
+						stroke-linecap="round"
+					/>
+					<line
+						x1="5"
+						y1="12"
+						x2="19"
+						y2="12"
+						stroke="currentColor"
+						stroke-width="3"
+						stroke-linecap="round"
+					/>
+				</svg>
+			</button>
+		</div>
+
+		<!-- Bottom sheet -->
+		<section
+			id="sheet"
+			class="sheet sheet--collapsed"
+			aria-label="Direcciones guardadas"
+		>
+			<button
+				id="sheetHandle"
+				class="sheet__handle"
+				type="button"
+				aria-expanded="false"
+				aria-controls="sheetBody"
+			>
+				<span class="sheet__grip"></span>
+				<span class="sheet__title">
+					Direcciones
+					<span
+						id="count"
+						class="sheet__count"
+						>0</span
+					>
+				</span>
+			</button>
+
+			<div
+				id="sheetBody"
+				class="sheet__body"
+			>
+				<!-- List view -->
+				<div
+					id="listView"
+					class="view"
+				>
+					<div class="listbar">
+						<button
+							id="exportBtn"
+							class="btn btn--sm"
+							type="button"
+						>
+							Exportar
+						</button>
+						<button
+							id="importBtn"
+							class="btn btn--sm"
+							type="button"
+						>
+							Importar
+						</button>
+						<input
+							id="importInput"
+							type="file"
+							accept="application/json,.json"
+							hidden
+						/>
+					</div>
+					<ul
+						id="list"
+						class="list"
+					></ul>
+				</div>
+
+				<!-- Save/Edit form view -->
+				<form
+					id="formView"
+					class="view form"
+					hidden
+				>
+					<h2
+						id="formTitle"
+						class="form__title"
+					>
+						Nueva dirección
+					</h2>
+					<label
+						class="field"
+						for="fName"
+					>
+						<span class="field__label">Nombre / referencia *</span>
+						<input
+							id="fName"
+							class="field__input"
+							type="text"
+							required
+							autocomplete="off"
+							placeholder="Casa de Marta, granja del pino…"
+						/>
+					</label>
+					<label
+						class="field"
+						for="fAddress"
+					>
+						<span class="field__label">Dirección</span>
+						<input
+							id="fAddress"
+							class="field__input"
+							type="text"
+							autocomplete="off"
+							placeholder="Calle, pueblo, km…"
+						/>
+					</label>
+					<label
+						class="field"
+						for="fNotes"
+					>
+						<span class="field__label">Notas para llegar</span>
+						<textarea
+							id="fNotes"
+							class="field__input field__input--area"
+							rows="3"
+							placeholder="Portón verde tras la curva, segundo camino a la derecha…"
+						></textarea>
+					</label>
+					<div class="coords">
+						<span class="coords__label">Coordenadas</span>
+						<span
+							id="fCoords"
+							class="coords__value"
+							>—</span
+						>
+					</div>
+					<div class="form__actions">
+						<button
+							id="formCancel"
+							class="btn btn--ghost"
+							type="button"
+						>
+							Cancelar
+						</button>
+						<button
+							id="formSave"
+							class="btn btn--primary"
+							type="submit"
+						>
+							Guardar
+						</button>
+					</div>
+				</form>
+			</div>
+		</section>
+
+		<!-- Toasts -->
+		<div
+			id="toasts"
+			class="toasts"
+			aria-live="polite"
+			aria-atomic="false"
+		></div>
+
+		<script
+			src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+			integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+			crossorigin=""
+		></script>
+		<script src="app.js"></script>
+	</body>
+</html>
