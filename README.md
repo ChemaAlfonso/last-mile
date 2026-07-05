@@ -15,6 +15,7 @@
 	<img src="https://img.shields.io/badge/dependencias-0-e8500a?labelColor=1a1714" alt="Cero dependencias" />
 	<img src="https://img.shields.io/badge/PWA-instalable-e8500a?labelColor=1a1714" alt="PWA instalable" />
 	<img src="https://img.shields.io/badge/datos-Catastro-2f7d4f?labelColor=1a1714" alt="Datos del Catastro" />
+	<img src="https://img.shields.io/badge/licencia-MIT-1a1714" alt="Licencia MIT" />
 </p>
 
 ---
@@ -80,6 +81,10 @@ La arquitectura se apoya en tres capas de persistencia: `addresses` (IndexedDB �
 - Mapa: [Leaflet](https://leafletjs.com) © colaboradores de [OpenStreetMap](https://www.openstreetmap.org/copyright).
 - Geocodificación: [Nominatim](https://nominatim.org) (respetando su política de uso).
 - Tipografía: [Barlow](https://fonts.google.com/specimen/Barlow) / Barlow Condensed.
+
+## Licencia
+
+[MIT](LICENSE.md) — úsala, cópiala, modifícala y compártela libremente, conservando el aviso de copyright y atribución.
 
 ---
 
