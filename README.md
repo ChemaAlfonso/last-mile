@@ -1,0 +1,88 @@
+<p align="center">
+	<img src="assets/og.png" alt="Last Mile — Direcciones rurales que no aparecen en el mapa" width="100%" />
+</p>
+
+<h1 align="center">Last Mile</h1>
+
+<p align="center">
+	<strong>Direcciones rurales que no aparecen en el mapa.</strong><br />
+	PWA offline para repartidores en zonas de campo y diseminados.<br />
+	<a href="https://lastmile.chemaalfonso.com">lastmile.chemaalfonso.com</a>
+</p>
+
+<p align="center">
+	<img src="https://img.shields.io/badge/vanilla-JS-f7df1e?labelColor=1a1714" alt="Vanilla JS" />
+	<img src="https://img.shields.io/badge/dependencias-0-e8500a?labelColor=1a1714" alt="Cero dependencias" />
+	<img src="https://img.shields.io/badge/PWA-instalable-e8500a?labelColor=1a1714" alt="PWA instalable" />
+	<img src="https://img.shields.io/badge/datos-Catastro-2f7d4f?labelColor=1a1714" alt="Datos del Catastro" />
+</p>
+
+---
+
+## El problema
+
+Miles de casas de campo tienen dirección oficial — *"Partida El Boch 100"*, *"Camino del Almajal 12"* — pero **no existen para Google Maps ni para ningún GPS comercial**. Quien reparte en estas zonas pierde tiempo en cada entrega, y los servicios de emergencia no encuentran las viviendas.
+
+Last Mile lo resuelve dos veces:
+
+1. **Base oficial**: incluye las direcciones rurales del [Catastro](https://www.catastro.hacienda.gob.es/webinspire/index.html) (datos abiertos) por población, con sus coordenadas exactas — partidas, diseminados, caminos, veredas y barrios de huerta que ningún mapa comercial conoce.
+2. **Base personal**: cuando llegas a un sitio que ni el Catastro clava, fijas el punto exacto con el GPS o tocando el mapa, le pones nombre y notas para llegar ("portón verde tras la curva") y queda guardado para la próxima.
+
+## Características
+
+- 🔍 **Búsqueda unificada en tres fuentes**: tus direcciones, la base oficial de tu zona y OpenStreetMap (Nominatim) — cada resultado con su etiqueta de origen. Insensible a acentos y por palabras sueltas: `boch 100` encuentra *El Boch, 100A*.
+- 📍 **Punto exacto, no aproximado**: fija por GPS (con círculo de precisión) o tocando el mapa, y afina arrastrando el pin.
+- ✏️ **Todo es corregible**: si el Catastro tiene un punto mal, edítalo — nombre, notas, posición. Tus correcciones se conservan al actualizar el dataset y viajan en tus copias de seguridad.
+- 📴 **Offline de verdad**: la app y todos los puntos funcionan sin cobertura (donde están estas casas suele no haberla). Solo el fondo del mapa y las búsquedas de sitios nuevos requieren red. El GPS funciona sin datos.
+- 🔒 **Privacidad total**: no hay servidor ni cuentas. Tus direcciones viven únicamente en tu dispositivo (IndexedDB). Exporta/importa un JSON para respaldo o para pasarlas a otro móvil.
+- 📱 **Instalable**: PWA a pantalla completa desde Chrome/Safari — icono propio, arranque instantáneo y actualizaciones automáticas.
+- 🗺️ **Escala**: renderizado por canvas con recorte por zoom y encuadre — 30.000 puntos con búsqueda a <1 ms por tecleo.
+- 🧭 **Ruta y compartir**: abre la navegación en tu app de mapas o comparte el punto por WhatsApp.
+
+## Poblaciones incluidas
+
+Catálogo actual (~18.500 puntos oficiales, Vega Baja y Baix Vinalopó). Cada usuario descarga solo su zona desde Ajustes:
+
+| Población | Puntos | Población | Puntos |
+|---|---:|---|---:|
+| Orihuela | 8.104 | Almoradí | 919 |
+| Crevillent | 3.795 | Cox | 250 |
+| Callosa de Segura | 1.450 | San Isidro | 104 |
+| Albatera | 1.428 | Granja de Rocamora | 98 |
+| Catral | 1.363 | Dolores | 958 |
+
+### Añadir una población
+
+```bash
+python3 tools/build_dataset.py <código_municipio> <id> "<Nombre>"
+# ejemplo:
+python3 tools/build_dataset.py 03059 crevillent Crevillent
+```
+
+El script (solo librería estándar, sin pip) descarga el GML INSPIRE del Catastro, conserva únicamente los tipos de vía rurales (partida, diseminado, camino, vereda, lugar, barrio…), limpia los nombres, deduplica por zona+número, convierte las coordenadas de UTM ETRS89 a WGS84 y actualiza el manifiesto `data/index.json` con control de versiones — las poblaciones ya descargadas por los usuarios muestran "Actualizar" automáticamente.
+
+## Desarrollo
+
+Sin build, sin bundler, sin npm — tres archivos y un directorio de datos:
+
+```bash
+python3 -m http.server 8000
+# → http://localhost:8000
+```
+
+> Sirve siempre por HTTP: abrir `index.html` como archivo rompe el service worker, IndexedDB y la geolocalización.
+
+La arquitectura se apoya en tres capas de persistencia: `addresses` (IndexedDB — tus puntos), `places` (IndexedDB — puntos oficiales por población, con ediciones marcadas) y `localStorage` (ajustes y visibilidad). El detalle completo está en [CLAUDE.md](CLAUDE.md).
+
+## Créditos y atribuciones
+
+- Direcciones rurales: [Dirección General del Catastro](https://www.catastro.hacienda.gob.es/webinspire/index.html) (servicios INSPIRE, datos abiertos).
+- Mapa: [Leaflet](https://leafletjs.com) © colaboradores de [OpenStreetMap](https://www.openstreetmap.org/copyright).
+- Geocodificación: [Nominatim](https://nominatim.org) (respetando su política de uso).
+- Tipografía: [Barlow](https://fonts.google.com/specimen/Barlow) / Barlow Condensed.
+
+---
+
+<p align="center">
+	Desarrollado por <a href="https://krakenlabsweb.com"><strong>Chema Alfonso · Kraken Labs Web</strong></a>
+</p>
