@@ -841,9 +841,21 @@ function ensureCanvasRenderer() {
 	return state.canvasRenderer
 }
 
-function clearDatasetDots() {
-	if (state.datasetGroup) state.datasetGroup.clearLayers()
+function clearDatasetDots(keepOpenPopup) {
+	if (!state.datasetGroup) return
+	// Popup autopan fires moveend, which re-renders: destroying the tapped marker
+	// would instantly close its popup, so keep that one marker alive across renders
+	let kept = null
+	if (keepOpenPopup) {
+		state.placeMarkers.forEach((marker, id) => {
+			if (marker.isPopupOpen()) kept = { id, marker }
+		})
+	}
+	state.datasetGroup.eachLayer(layer => {
+		if (!kept || layer !== kept.marker) state.datasetGroup.removeLayer(layer)
+	})
 	state.placeMarkers.clear()
+	if (kept) state.placeMarkers.set(kept.id, kept.marker)
 }
 
 function scheduleRenderDots() {
@@ -859,13 +871,17 @@ function maybeShowZoomHint() {
 
 function renderDatasetDots(silentHint) {
 	if (!map) return
-	clearDatasetDots()
 	const towns = activeTowns()
-	if (!towns.length) return
+	if (!towns.length) {
+		clearDatasetDots(false)
+		return
+	}
 	if (map.getZoom() < CONFIG.dataset.zoomThreshold) {
+		clearDatasetDots(false)
 		if (!silentHint) maybeShowZoomHint()
 		return
 	}
+	clearDatasetDots(true)
 	ensureDatasetGroup()
 	const renderer = ensureCanvasRenderer()
 	const bounds = map.getBounds().pad(CONFIG.dataset.boundsPad)
@@ -877,6 +893,11 @@ function renderDatasetDots(silentHint) {
 		for (let i = 0; i < places.length; i++) {
 			const place = places[i]
 			if (!bounds.contains([place.lat, place.lng])) continue
+			// The marker kept alive by clearDatasetDots (open popup) must not be duplicated
+			if (state.placeMarkers.has(place.id)) {
+				count++
+				continue
+			}
 			const marker = L.circleMarker([place.lat, place.lng], {
 				renderer,
 				radius: dot.radius,
