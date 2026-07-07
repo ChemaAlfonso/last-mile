@@ -637,7 +637,7 @@ function onSearchInput() {
 		state.searchController = null
 	}
 	if (!query) {
-		hideResults()
+		showPartidaBrowser()
 		return
 	}
 	renderResults(localMatches(query), datasetMatches(query), null)
@@ -752,6 +752,82 @@ function hideResults() {
 function clearSearch() {
 	el.searchInput.value = ''
 	el.searchClear.hidden = true
+}
+
+/* ---------- partida browser (empty-query drill-down) ---------- */
+
+function partidaGroups() {
+	const groups = []
+	activeTowns().forEach(town => {
+		const byPartida = new Map()
+		;(state.places.get(town) || []).forEach(place => {
+			const list = byPartida.get(place.partida)
+			if (list) list.push(place)
+			else byPartida.set(place.partida, [place])
+		})
+		Array.from(byPartida.keys())
+			.sort((a, b) => a.localeCompare(b, 'es'))
+			.forEach(partida => groups.push({ town, partida, places: byPartida.get(partida) }))
+	})
+	return groups
+}
+
+function addressCountLabel(count) {
+	return count === 1 ? '1 dirección' : `${count} direcciones`
+}
+
+function showPartidaBrowser() {
+	const groups = partidaGroups()
+	if (groups.length === 0) {
+		hideResults()
+		return
+	}
+	const parts = ['<div class="result result--muted">Elige una partida</div>']
+	groups.forEach((group, index) => {
+		parts.push(
+			`<button type="button" class="result" data-group="${index}">` +
+			'<div class="result__main">' +
+			`<div class="result__name">${escapeHtml(group.partida)}</div>` +
+			`<div class="result__sub">${addressCountLabel(group.places.length)}</div>` +
+			'</div>' +
+			`<span class="badge badge--town">${escapeHtml(townLabel(group.town))}</span>` +
+			'</button>'
+		)
+	})
+	el.results.innerHTML = parts.join('')
+	el.results.hidden = false
+	el.results.querySelectorAll('[data-group]').forEach(node =>
+		node.addEventListener('click', () => showPartidaNumbers(groups[Number(node.getAttribute('data-group'))]))
+	)
+}
+
+function showPartidaNumbers(group) {
+	const places = group.places
+		.slice()
+		.sort((a, b) => String(a.num).localeCompare(String(b.num), 'es', { numeric: true }))
+	const chips = places
+		.map(p => `<button type="button" class="numchip" data-place="${escapeHtml(p.id)}">${escapeHtml(p.num)}</button>`)
+		.join('')
+	el.results.innerHTML =
+		'<button type="button" class="result" data-back>' +
+		'<div class="result__main">' +
+		`<div class="result__name">‹ ${escapeHtml(group.partida)}</div>` +
+		`<div class="result__sub">${addressCountLabel(places.length)}</div>` +
+		'</div>' +
+		`<span class="badge badge--town">${escapeHtml(townLabel(group.town))}</span>` +
+		'</button>' +
+		`<div class="results__nums">${chips}</div>`
+	el.results.hidden = false
+	el.results.querySelector('[data-back]').addEventListener('click', showPartidaBrowser)
+	el.results.querySelectorAll('[data-place]').forEach(node =>
+		node.addEventListener('click', () => {
+			const place = findPlaceById(node.getAttribute('data-place'))
+			hideResults()
+			clearSearch()
+			el.searchInput.blur()
+			if (place) focusPlace(place)
+		})
+	)
 }
 
 /* ---------- datasets (official points) ---------- */
@@ -1719,6 +1795,7 @@ function bindEvents() {
 	el.searchInput.addEventListener('input', onSearchInput)
 	el.searchInput.addEventListener('focus', () => {
 		if (el.searchInput.value.trim()) onSearchInput()
+		else showPartidaBrowser()
 	})
 	el.searchClear.addEventListener('click', () => {
 		clearSearch()
@@ -1726,6 +1803,9 @@ function bindEvents() {
 		el.searchInput.focus()
 	})
 	document.addEventListener('click', ev => {
+		// A detached target means a results click handler already re-rendered the panel; closest()
+		// would return null and wrongly hide it
+		if (!ev.target.isConnected) return
 		if (!el.results.hidden && !ev.target.closest('.search')) hideResults()
 	})
 
