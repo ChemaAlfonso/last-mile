@@ -324,6 +324,7 @@ const el = {
 	settingsBtn: document.getElementById('settingsBtn'),
 	settingsBack: document.getElementById('settingsBack'),
 	exportBtn: document.getElementById('exportBtn'),
+	shareBackupBtn: document.getElementById('shareBackupBtn'),
 	importBtn: document.getElementById('importBtn'),
 	importInput: document.getElementById('importInput'),
 	datosList: document.getElementById('datosList'),
@@ -1769,44 +1770,57 @@ function deleteTown(townId) {
 function importPlaceEdits(edits) {
 	// Edited place records are self-contained, so they persist even if the town dataset
 	// is not downloaded -- they stay dormant until that town is loaded into memory.
-	const valid = edits
-		.filter(e => {
-			if (!e || typeof e.id !== 'string' || typeof e.town !== 'string') return false
-			const lat = toFiniteNumber(e.lat)
-			const lng = toFiniteNumber(e.lng)
-			return isFiniteNumber(lat) && isFiniteNumber(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180
-		})
-		.map(e => ({
+	// Merge rule: the importer's own edits always prevail. Incoming edits are applied only
+	// to official places the importer has NOT already edited locally; conflicts are skipped
+	// and counted. Re-importing the same file is idempotent because applied records become
+	// `edited: true` locally and are then treated as conflicts on the next pass.
+	let invalid = 0
+	const candidates = []
+	edits.forEach(e => {
+		if (!e || typeof e.id !== 'string' || typeof e.town !== 'string') return invalid++
+		const lat = toFiniteNumber(e.lat)
+		const lng = toFiniteNumber(e.lng)
+		if (!isFiniteNumber(lat) || !isFiniteNumber(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return invalid++
+		candidates.push({
 			id: e.id,
 			town: e.town,
 			name: String(e.name || ''),
 			partida: String(e.partida || ''),
 			num: String(e.num || ''),
 			ref: typeof e.ref === 'string' ? e.ref : '',
-			lat: Number(e.lat),
-			lng: Number(e.lng),
+			lat,
+			lng,
 			address: typeof e.address === 'string' ? e.address : '',
 			notes: typeof e.notes === 'string' ? e.notes : '',
 			edited: true,
 			updatedAt: typeof e.updatedAt === 'string' ? e.updatedAt : new Date().toISOString()
-		}))
-	if (!valid.length) return
-	dbBulkPut(CONFIG.db.placesStore, valid)
-		.then(() => {
-			valid.forEach(record => {
-				if (!state.places.has(record.town)) return
-				const arr = state.places.get(record.town)
-				const idx = arr.findIndex(p => p.id === record.id)
-				const mem = makeMemPlace(record)
-				if (idx >= 0) arr[idx] = mem
-				else arr.push(mem)
-			})
-			renderDatasetDots()
-			toast(`Importadas ${valid.length} ediciones`, 'ok')
 		})
-		.catch(err => {
-			console.error(err)
-			toast('Error al importar ediciones', 'error')
+	})
+	return dbGetAll(CONFIG.db.placesStore)
+		.then(all => new Set(all.filter(record => record.edited).map(record => record.id)))
+		.catch(() => new Set())
+		.then(localEditedIds => {
+			let conflicts = 0
+			const toApply = candidates.filter(record => {
+				if (localEditedIds.has(record.id)) {
+					conflicts++
+					return false
+				}
+				return true
+			})
+			if (!toApply.length) return { added: 0, conflicts, invalid }
+			return dbBulkPut(CONFIG.db.placesStore, toApply).then(() => {
+				toApply.forEach(record => {
+					if (!state.places.has(record.town)) return
+					const arr = state.places.get(record.town)
+					const idx = arr.findIndex(p => p.id === record.id)
+					const mem = makeMemPlace(record)
+					if (idx >= 0) arr[idx] = mem
+					else arr.push(mem)
+				})
+				renderDatasetDots()
+				return { added: toApply.length, conflicts, invalid }
+			})
 		})
 }
 
@@ -2230,9 +2244,10 @@ function confirmDelete(btn, id) {
 
 /* ---------- import / export ---------- */
 
-function exportData() {
-	// Own addresses always export; edited official points ride along under placeEdits
-	dbGetAll(CONFIG.db.placesStore)
+function buildBackupPayload() {
+	// Own addresses always export; edited official points ride along under placeEdits.
+	// This shape is the shared/backup contract -- keep it additive-only for compatibility.
+	return dbGetAll(CONFIG.db.placesStore)
 		.then(all => all.filter(record => record.edited))
 		.catch(() => [])
 		.then(edits => {
@@ -2243,18 +2258,57 @@ function exportData() {
 				addresses: state.addresses
 			}
 			if (edits.length) payload.placeEdits = edits
-			const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-			const url = URL.createObjectURL(blob)
-			const link = document.createElement('a')
-			const stamp = new Date().toISOString().slice(0, 10)
-			link.href = url
-			link.download = `last-mile-${stamp}.json`
-			document.body.appendChild(link)
-			link.click()
-			link.remove()
-			URL.revokeObjectURL(url)
-			toast('Datos exportados', 'ok')
+			return payload
 		})
+}
+
+function backupFilename() {
+	const stamp = new Date().toISOString().slice(0, 10)
+	return `last-mile-${stamp}.json`
+}
+
+function downloadBackup(payload) {
+	const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+	const url = URL.createObjectURL(blob)
+	const link = document.createElement('a')
+	link.href = url
+	link.download = backupFilename()
+	document.body.appendChild(link)
+	link.click()
+	link.remove()
+	URL.revokeObjectURL(url)
+}
+
+function exportData() {
+	buildBackupPayload().then(payload => {
+		downloadBackup(payload)
+		toast('Datos exportados', 'ok')
+	})
+}
+
+function shareBackup() {
+	// Share the very same backup JSON via the native share sheet when the platform can attach
+	// files; otherwise fall back to the plain download and tell the driver to attach it manually.
+	buildBackupPayload().then(payload => {
+		const json = JSON.stringify(payload, null, 2)
+		const file = typeof File === 'function' ? new File([json], backupFilename(), { type: 'application/json' }) : null
+		const canShareFile = file && navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share
+		const fallback = () => {
+			downloadBackup(payload)
+			toast('Archivo descargado. Adjúntalo para compartirlo', 'warn')
+		}
+		if (canShareFile) {
+			// Some platforms (Chrome on macOS) accept canShare({files}) yet reject share() with
+			// NotAllowedError. AbortError means the driver dismissed the sheet on purpose.
+			navigator
+				.share({ files: [file], title: 'Last Mile', text: 'Mis puntos de Last Mile' })
+				.catch(err => {
+					if (!err || err.name !== 'AbortError') fallback()
+				})
+			return
+		}
+		fallback()
+	})
 }
 
 function importData(file) {
@@ -2273,31 +2327,53 @@ function importData(file) {
 			toast('Archivo no reconocido', 'error')
 			return
 		}
-		// Own-addresses import is unchanged; placeEdits are handled separately when present
-		if (list) mergeImported(list)
-		if (edits) importPlaceEdits(edits)
+		// Merge rule: the importer's local data always prevails on conflict. Both halves run,
+		// then a single compact summary reports what was added and what was kept local.
+		Promise.all([
+			list ? mergeImported(list) : Promise.resolve(null),
+			edits ? importPlaceEdits(edits) : Promise.resolve(null)
+		])
+			.then(([addrResult, editResult]) => summariseImport(addrResult, editResult))
+			.catch(err => {
+				console.error(err)
+				toast('Error al importar', 'error')
+			})
 	}
 	reader.onerror = () => toast('No se pudo leer el archivo', 'error')
 	reader.readAsText(file)
 }
 
+function addressSignature(name, lat, lng) {
+	// Accent/case-insensitive name plus rounded coords -> catches the same logical point even
+	// when it arrives with a fresh id (older files carried no ids), keeping re-import idempotent.
+	const d = CONFIG.ui.coordDecimals
+	return `${normalize(name).trim()}|${lat.toFixed(d)}|${lng.toFixed(d)}`
+}
+
 function mergeImported(list) {
 	const existingIds = new Set(state.addresses.map(a => a.id))
+	const existingSigs = new Set(state.addresses.map(a => addressSignature(a.name, a.lat, a.lng)))
 	const toAdd = []
-	let skipped = 0
+	let conflicts = 0
+	let invalid = 0
 	list.forEach(entry => {
-		if (!entry || typeof entry.name !== 'string' || !entry.name.trim()) return skipped++
+		if (!entry || typeof entry.name !== 'string' || !entry.name.trim()) return invalid++
 		const lat = toFiniteNumber(entry.lat)
 		const lng = toFiniteNumber(entry.lng)
-		if (!isFiniteNumber(lat) || !isFiniteNumber(lng)) return skipped++
-		if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return skipped++
-		let id = typeof entry.id === 'string' && entry.id ? entry.id : generateId()
-		if (existingIds.has(id)) return skipped++
+		if (!isFiniteNumber(lat) || !isFiniteNumber(lng)) return invalid++
+		if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return invalid++
+		const name = entry.name.trim()
+		const id = typeof entry.id === 'string' && entry.id ? entry.id : generateId()
+		// Local prevails: skip on id collision or on an exact duplicate (same rounded coords + name)
+		if (existingIds.has(id)) return conflicts++
+		const sig = addressSignature(name, lat, lng)
+		if (existingSigs.has(sig)) return conflicts++
 		existingIds.add(id)
+		existingSigs.add(sig)
 		const now = new Date().toISOString()
 		toAdd.push({
 			id,
-			name: entry.name.trim(),
+			name,
 			address: typeof entry.address === 'string' ? entry.address : '',
 			notes: typeof entry.notes === 'string' ? entry.notes : '',
 			lat,
@@ -2306,22 +2382,36 @@ function mergeImported(list) {
 			updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : now
 		})
 	})
-	if (toAdd.length === 0) {
-		toast(`Importadas 0, omitidas ${skipped}`, 'warn')
-		return
+	if (toAdd.length === 0) return Promise.resolve({ added: 0, conflicts, invalid })
+	return Promise.all(toAdd.map(record => dbPut(CONFIG.db.store, record))).then(() => {
+		toAdd.forEach(upsertAddress)
+		rebuildOwnHaystacks()
+		renderList()
+		rebuildMarkers()
+		return { added: toAdd.length, conflicts, invalid }
+	})
+}
+
+function summariseImport(addrResult, editResult) {
+	const points = addrResult ? addrResult.added : 0
+	const corrections = editResult ? editResult.added : 0
+	const conflicts = (addrResult ? addrResult.conflicts : 0) + (editResult ? editResult.conflicts : 0)
+	const invalid = (addrResult ? addrResult.invalid : 0) + (editResult ? editResult.invalid : 0)
+
+	const segments = []
+	if (points) segments.push(`${points} ${points === 1 ? 'punto' : 'puntos'}`)
+	if (corrections) segments.push(`${corrections} ${corrections === 1 ? 'corrección' : 'correcciones'}`)
+
+	let message
+	if (segments.length) {
+		message = `${points ? 'Añadidos' : 'Añadidas'} ${segments.join(' y ')}`
+	} else {
+		message = 'Sin novedades'
 	}
-	Promise.all(toAdd.map(record => dbPut(CONFIG.db.store, record)))
-		.then(() => {
-			toAdd.forEach(upsertAddress)
-			rebuildOwnHaystacks()
-			renderList()
-			rebuildMarkers()
-			toast(`Importadas ${toAdd.length}, omitidas ${skipped}`, 'ok')
-		})
-		.catch(err => {
-			console.error(err)
-			toast('Error al importar', 'error')
-		})
+	if (conflicts) message += ` · conservados los tuyos en ${conflicts} ${conflicts === 1 ? 'conflicto' : 'conflictos'}`
+	if (invalid) message += ` · ${invalid} ${invalid === 1 ? 'descartado' : 'descartados'}`
+
+	toast(message, segments.length ? 'ok' : 'warn')
 }
 
 /* ---------- sheet ---------- */
@@ -2432,6 +2522,7 @@ function bindEvents() {
 	el.settingsBtn.addEventListener('click', showSettingsView)
 	el.settingsBack.addEventListener('click', showListView)
 	el.exportBtn.addEventListener('click', exportData)
+	el.shareBackupBtn.addEventListener('click', shareBackup)
 	el.importBtn.addEventListener('click', () => el.importInput.click())
 	el.importInput.addEventListener('change', () => {
 		const file = el.importInput.files && el.importInput.files[0]

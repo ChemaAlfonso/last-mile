@@ -664,6 +664,7 @@ button {
 .listbar--static {
 	position: static;
 	padding: 0;
+	flex-wrap: wrap;
 }
 
 /* ---------- Datos (official datasets) ---------- */
