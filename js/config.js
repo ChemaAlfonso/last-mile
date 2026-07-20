@@ -51,7 +51,8 @@ const CONFIG = {
 		url: 'data/graph-comarca.json',
 		// Bump (or override via manifest.graph.version) to refresh installed copies through the normal
 		// town download/update flow -- the routing graph is invisible to the driver, like the basemap.
-		version: 1,
+		// v2 carries OSM turn restrictions.
+		version: 2,
 		// Coarse floor used only when the server sends no Content-Length: reject a blob far smaller than
 		// the real graph (~7 MB). The precise check uses the server's Content-Length.
 		expectedBytes: 5 * 1024 * 1024,

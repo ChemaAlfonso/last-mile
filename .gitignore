@@ -3,3 +3,4 @@
 __pycache__/
 data/*.pmtiles
 data/graph-comarca.json
+tools/.overpass-cache/
