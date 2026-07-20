@@ -11,10 +11,39 @@
 const CONFIG = {
 	db: {
 		name: 'last-mile',
-		version: 2,
+		version: 3,
 		store: 'addresses',
 		placesStore: 'places',
-		placesTownIndex: 'town'
+		placesTownIndex: 'town',
+		basemapStore: 'basemap'
+	},
+	basemap: {
+		id: 'comarca',
+		url: 'data/basemap-comarca.pmtiles',
+		// Bump (or override via manifest.basemap.version) to make installed copies refresh through
+		// the normal town download/update flow -- the basemap is invisible to the driver.
+		version: 1,
+		// Coarse floor used only when the server sends no Content-Length: reject a blob far smaller
+		// than the real basemap (~25 MB). The precise check uses the server's Content-Length.
+		expectedBytes: 20 * 1024 * 1024,
+		// A truncated download must never be accepted: require at least this fraction of the
+		// server-reported Content-Length before marking the basemap installed.
+		minCompleteRatio: 0.98,
+		// protomaps-leaflet built-in flavor closest to the app's light look
+		flavor: 'light',
+		lang: 'es',
+		minZoom: 0,
+		maxZoom: 18,
+		// The vector tiles top out here; Leaflet overzooms beyond it so z16-18 still render
+		maxDataZoom: 15,
+		// Fallback comarca bbox [[minLat,minLon],[maxLat,maxLon]] used if the pmtiles header can't be
+		// read. The overlay is clamped to these bounds so it never paints over the world raster.
+		bounds: [
+			[37.85, -1.085],
+			[38.356, -0.666]
+		],
+		// OSM is already credited by the always-on raster base; the overlay only adds the Protomaps credit
+		attribution: '<a href="https://protomaps.com" target="_blank" rel="noopener">Protomaps</a>'
 	},
 	dataset: {
 		indexUrl: 'data/index.json',
@@ -24,6 +53,9 @@ const CONFIG = {
 		debounceMs: 150,
 		boundsPad: 0.2,
 		resultLimit: 8,
+		// Extra px added to each dot's tap hit-area (visual unchanged) so imprecise taps still open
+		// the popup. Kept modest to avoid neighbours stealing taps in dense partidas.
+		tapTolerance: 8,
 		dot: {
 			radius: 6,
 			weight: 2,
@@ -86,6 +118,10 @@ function openDb() {
 				const places = db.createObjectStore(CONFIG.db.placesStore, { keyPath: 'id' })
 				places.createIndex(CONFIG.db.placesTownIndex, 'town', { unique: false })
 			}
+			// v2 -> v3: holds the single offline basemap blob + its metadata
+			if (!db.objectStoreNames.contains(CONFIG.db.basemapStore)) {
+				db.createObjectStore(CONFIG.db.basemapStore, { keyPath: 'id' })
+			}
 		}
 		req.onsuccess = () => {
 			dbInstance = req.result
@@ -105,6 +141,17 @@ function dbGetAll(storeName) {
 			new Promise((resolve, reject) => {
 				const req = store.getAll()
 				req.onsuccess = () => resolve(req.result || [])
+				req.onerror = () => reject(req.error)
+			})
+	)
+}
+
+function dbGet(storeName, id) {
+	return dbStore(storeName, 'readonly').then(
+		store =>
+			new Promise((resolve, reject) => {
+				const req = store.get(id)
+				req.onsuccess = () => resolve(req.result || null)
 				req.onerror = () => reject(req.error)
 			})
 	)
@@ -244,7 +291,15 @@ const state = {
 	pendingFocusPlaceId: null,
 	zoomHintShown: false,
 	lastSearch: null,
-	partidaReturn: null
+	partidaReturn: null,
+	baseLayer: null,
+	basemapOverlay: null,
+	basemapInstalled: false,
+	basemapBlob: null,
+	basemapMeta: null,
+	basemapBusy: false,
+	basemapProgress: 0,
+	basemapFailed: false
 }
 
 /* ---------- dom ---------- */
@@ -272,6 +327,7 @@ const el = {
 	importBtn: document.getElementById('importBtn'),
 	importInput: document.getElementById('importInput'),
 	datosList: document.getElementById('datosList'),
+	basemapStatus: document.getElementById('basemapStatus'),
 	formTitle: document.getElementById('formTitle'),
 	fName: document.getElementById('fName'),
 	fAddress: document.getElementById('fAddress'),
@@ -438,12 +494,269 @@ function tempIcon() {
 
 function initMap() {
 	map = L.map(el.map, { zoomControl: true, attributionControl: true }).setView(CONFIG.map.center, CONFIG.map.zoom)
-	L.tileLayer(CONFIG.map.tileUrl, {
-		maxZoom: CONFIG.map.maxZoom,
-		attribution: CONFIG.map.attribution
-	}).addTo(map)
+	// The offline vector layer sits UNDERNEATH the raster (z150 < tilePane z200) and below the dataset
+	// dots / markers (overlayPane z400+). Online, opaque raster tiles cover it completely -> ordinary
+	// OSM look with no seam. Offline, failed raster tiles are transparent and the vector shows through.
+	map.createPane('basemapVector')
+	map.getPane('basemapVector').style.zIndex = 150
+	// The OSM raster is ALWAYS on top as the base map
+	state.baseLayer = osmRasterLayer().addTo(map)
 	map.on('click', onMapClick)
 	map.on('moveend zoomend', scheduleRenderDots)
+}
+
+/* ---------- base map: offline vector (bottom, when installed) + OSM raster (top, always) ---------- */
+
+// 1x1 transparent PNG -- a failed raster tile paints nothing, so the vector below shows through
+const TRANSPARENT_TILE =
+	'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
+function osmRasterLayer() {
+	return L.tileLayer(CONFIG.map.tileUrl, {
+		maxZoom: CONFIG.map.maxZoom,
+		attribution: CONFIG.map.attribution,
+		// Keep failed tiles transparent (never an opaque gray placeholder) so the vector below is visible
+		errorTileUrl: TRANSPARENT_TILE
+	})
+}
+
+function addBasemapOverlay(blob) {
+	// Add the comarca vector layer beneath the raster (static stack, no connectivity switching)
+	return createOfflineBasemapLayer(blob).then(layer => {
+		if (!layer) return false
+		removeBasemapOverlay()
+		state.basemapOverlay = layer
+		layer.addTo(map)
+		return true
+	})
+}
+
+function removeBasemapOverlay() {
+	if (state.basemapOverlay) {
+		map.removeLayer(state.basemapOverlay)
+		state.basemapOverlay = null
+	}
+}
+
+function pmtilesReaderClass() {
+	// protomaps-leaflet (v5) bundles the pmtiles reader but does not export the class. Reach it via
+	// a throwaway PmtilesSource whose internal .p is a PMTiles instance (verified against the vendor
+	// build). The placeholder never fetches -- the reader is inert until a tile is requested.
+	try {
+		const probe = new protomapsL.PmtilesSource('_placeholder', true)
+		return probe.p && probe.p.constructor
+	} catch (err) {
+		return null
+	}
+}
+
+function blobPmtilesSource(blob) {
+	// pmtiles Source interface: getKey() + getBytes(offset, length) -> { data: ArrayBuffer }.
+	// Reads bytes straight out of the local Blob -- no network, works fully offline.
+	return {
+		getKey: () => CONFIG.basemap.url,
+		getBytes: (offset, length) =>
+			blob
+				.slice(offset, offset + length)
+				.arrayBuffer()
+				.then(data => ({ data }))
+	}
+}
+
+function boundsFromHeader(h) {
+	// pmtiles v3 header carries the archive bbox; fall back to the configured comarca bbox
+	if (h && isFiniteNumber(h.minLat) && isFiniteNumber(h.minLon) && isFiniteNumber(h.maxLat) && isFiniteNumber(h.maxLon)) {
+		return L.latLngBounds([h.minLat, h.minLon], [h.maxLat, h.maxLon])
+	}
+	return L.latLngBounds(CONFIG.basemap.bounds)
+}
+
+function createOfflineBasemapLayer(blob) {
+	// Async: reads the archive header to clamp the layer to the comarca bbox so it never requests or
+	// paints tiles outside the comarca. Resolves null on any failure (the raster base still stands).
+	if (typeof protomapsL === 'undefined' || !protomapsL.leafletLayer || !blob) return Promise.resolve(null)
+	let archive
+	try {
+		const PMTiles = pmtilesReaderClass()
+		if (!PMTiles) return Promise.resolve(null)
+		archive = new PMTiles(blobPmtilesSource(blob))
+	} catch (err) {
+		console.error('offline basemap reader failed', err)
+		return Promise.resolve(null)
+	}
+	return archive
+		.getHeader()
+		.then(header => {
+			// url accepts a PMTiles instance directly (non-string branch of leafletLayer); maxDataZoom
+			// caps the vector data at z15 and Leaflet overzooms it so z16-18 still render
+			const layer = protomapsL.leafletLayer({
+				url: archive,
+				pane: 'basemapVector',
+				bounds: boundsFromHeader(header),
+				attribution: CONFIG.basemap.attribution,
+				flavor: CONFIG.basemap.flavor,
+				lang: CONFIG.basemap.lang,
+				maxDataZoom: CONFIG.basemap.maxDataZoom,
+				minZoom: CONFIG.basemap.minZoom,
+				maxZoom: CONFIG.basemap.maxZoom
+			})
+			// The flavor sets an opaque gray tile background; clear it so partial edge tiles and gaps
+			// let the raster world show through instead of hiding it
+			layer.backgroundColor = undefined
+			return layer
+		})
+		.catch(err => {
+			console.error('offline basemap layer failed', err)
+			return null
+		})
+}
+
+/* ---------- offline basemap: rides along with town downloads, invisible to the driver ---------- */
+
+function basemapSource() {
+	// Manifest may later declare the basemap (url/version/size); fall back to the CONFIG defaults
+	const m = state.manifest && state.manifest.basemap ? state.manifest.basemap : null
+	return {
+		url: (m && m.file ? CONFIG.dataset.fileBase + m.file : CONFIG.basemap.url),
+		version: Number((m && m.version) || CONFIG.basemap.version),
+		size: Number((m && m.size) || 0)
+	}
+}
+
+function hasAnyTown() {
+	return Object.keys(state.settings.towns).length > 0
+}
+
+function basemapNeeded() {
+	// Needs a fetch when missing, or when the installed copy is older than the declared version
+	if (!hasAnyTown()) return false
+	const src = basemapSource()
+	if (!state.basemapInstalled) return true
+	return Number(state.basemapMeta && state.basemapMeta.version) < src.version
+}
+
+function loadBasemapState() {
+	// Read the stored blob (if any) at boot and add the offline vector overlay on top of the raster
+	return dbGet(CONFIG.db.basemapStore, CONFIG.basemap.id)
+		.then(rec => {
+			if (rec && rec.blob && rec.size) {
+				state.basemapInstalled = true
+				state.basemapBlob = rec.blob
+				state.basemapMeta = { size: rec.size, installedAt: rec.installedAt, version: rec.version || 1 }
+				if (map) addBasemapOverlay(rec.blob)
+			} else {
+				state.basemapInstalled = false
+			}
+		})
+		.catch(() => {})
+		.then(renderBasemapStatus)
+}
+
+function ensureBasemap() {
+	// Deduped, non-blocking. Fetches the basemap only when a town is installed and it is missing/outdated.
+	if (state.basemapBusy) return Promise.resolve(false)
+	if (!basemapNeeded()) return Promise.resolve(false)
+	if (typeof navigator !== 'undefined' && navigator.onLine === false) return Promise.resolve(false)
+	return fetchAndStoreBasemap(basemapSource())
+}
+
+function fetchAndStoreBasemap(src) {
+	state.basemapBusy = true
+	state.basemapFailed = false
+	state.basemapProgress = 0
+	renderBasemapStatus()
+	return fetch(src.url, { cache: 'no-store' })
+		.then(res => {
+			if (!res.ok) throw new Error('HTTP ' + res.status)
+			const total = Number(res.headers.get('Content-Length')) || 0
+			if (!res.body || !res.body.getReader) {
+				// No streaming support: fall back to a plain blob() (no progress %)
+				return res.blob().then(blob => ({ blob, total }))
+			}
+			const reader = res.body.getReader()
+			const chunks = []
+			let received = 0
+			const pump = () =>
+				reader.read().then(({ done, value }) => {
+					if (done) return
+					chunks.push(value)
+					received += value.length
+					if (total) {
+						state.basemapProgress = received / total
+						renderBasemapStatus()
+					}
+					return pump()
+				})
+			return pump().then(() => ({ blob: new Blob(chunks, { type: 'application/octet-stream' }), total, received }))
+		})
+		.then(({ blob, total, received }) => {
+			// Never mark a truncated download installed: require the full Content-Length (or, when the
+			// server sends none, at least ~the expected size)
+			const got = received != null ? received : blob.size
+			const target = total || CONFIG.basemap.expectedBytes
+			if (got < Math.floor(target * 0.98)) throw new Error('incomplete-download')
+			const record = {
+				id: CONFIG.basemap.id,
+				blob,
+				size: blob.size,
+				version: src.version,
+				installedAt: new Date().toISOString()
+			}
+			return dbPut(CONFIG.db.basemapStore, record).then(() => record)
+		})
+		.then(record => {
+			state.basemapBusy = false
+			state.basemapInstalled = true
+			state.basemapBlob = record.blob
+			state.basemapMeta = { size: record.size, installedAt: record.installedAt, version: record.version }
+			addBasemapOverlay(record.blob)
+			renderBasemapStatus()
+			// Refresh the towns list so the "Actualizar todo" control (driven by basemapNeeded) updates
+			renderDatos()
+			return true
+		})
+		.catch(err => {
+			// Town data is the core value and already succeeded; the basemap is enhancement. Keep the
+			// app fully usable, remember the failure, and let the next town op / boot retry silently.
+			state.basemapBusy = false
+			state.basemapFailed = true
+			console.error('basemap download failed', err)
+			if (err && (err.name === 'QuotaExceededError' || /quota/i.test(String(err && err.message)))) {
+				toast('No hay espacio para el mapa sin conexión; se reintentará al liberar espacio', 'warn')
+			} else {
+				toast('El mapa sin conexión se descargará más tarde', 'warn')
+			}
+			renderBasemapStatus()
+			renderDatos()
+			return false
+		})
+}
+
+function deleteBasemapBlob() {
+	return dbDelete(CONFIG.db.basemapStore, CONFIG.basemap.id)
+		.then(() => {
+			state.basemapInstalled = false
+			state.basemapBlob = null
+			state.basemapMeta = null
+			// Remove the overlay only; the raster base stays exactly as it was
+			if (map) removeBasemapOverlay()
+			renderBasemapStatus()
+		})
+		.catch(err => console.error('basemap delete failed', err))
+}
+
+function basemapStatusText() {
+	// Only actionable states surface; installed/idle stays silent (a driver gets no value from it)
+	if (state.basemapBusy) return `Mapa sin conexión: descargando… ${Math.round((state.basemapProgress || 0) * 100)}%`
+	if (state.basemapFailed) return 'Mapa sin conexión: se descargará más tarde'
+	return ''
+}
+
+function renderBasemapStatus() {
+	if (!el.basemapStatus) return
+	const text = basemapStatusText()
+	el.basemapStatus.textContent = text
+	el.basemapStatus.hidden = !text
 }
 
 function savedPopupHtml(record) {
@@ -1056,7 +1369,9 @@ function ensureDatasetGroup() {
 
 function ensureCanvasRenderer() {
 	// One shared canvas renderer for thousands of dots -- far cheaper than DOM markers
-	if (!state.canvasRenderer) state.canvasRenderer = L.canvas({ padding: 0.3 })
+	if (!state.canvasRenderer) {
+		state.canvasRenderer = L.canvas({ padding: 0.3, tolerance: CONFIG.dataset.tapTolerance })
+	}
 	return state.canvasRenderer
 }
 
@@ -1075,6 +1390,13 @@ function clearDatasetDots(keepOpenPopup) {
 	})
 	state.placeMarkers.clear()
 	if (kept) state.placeMarkers.set(kept.id, kept.marker)
+}
+
+function refreshDatasetInteractivity() {
+	// Rebuild the dots so their `interactive` flag matches the current placement mode
+	if (!map) return
+	clearDatasetDots(false)
+	renderDatasetDots(true)
 }
 
 function scheduleRenderDots() {
@@ -1123,7 +1445,10 @@ function renderDatasetDots(silentHint) {
 				color: dot.color,
 				weight: dot.weight,
 				fillColor: dot.fillColor,
-				fillOpacity: dot.fillOpacity
+				fillOpacity: dot.fillOpacity,
+				// While placing/editing, dots must not swallow the tap -- it has to reach the map so the
+				// point lands where the driver tapped (even right next to an existing dot)
+				interactive: !state.placementMode
 			})
 			marker.bindPopup(placePopupHtml(place))
 			marker.on('popupopen', ev => bindPlacePopup(ev.popup, place))
@@ -1197,6 +1522,7 @@ function startEditPlace(place) {
 	setTempMarker(place.lat, place.lng)
 	showFormView()
 	expandSheet()
+	refreshDatasetInteractivity()
 }
 
 function loadEnabledTowns() {
@@ -1280,6 +1606,8 @@ function downloadTown(townId, btn) {
 			toast(`${data.name}: ${formatMiles(data.count)} puntos cargados`, 'ok')
 			renderDatos()
 			renderDatasetDots()
+			// Town first (instant value), then pull the offline basemap silently. Never blocks the town.
+			ensureBasemap()
 		})
 		.catch(err => {
 			console.error(err)
@@ -1330,6 +1658,7 @@ function updateTown(townId, btn) {
 			toast(`Actualizado: ${formatMiles(count)} puntos${keptText}`, 'ok')
 			renderDatos()
 			renderDatasetDots()
+			ensureBasemap()
 		})
 		.catch(err => {
 			console.error(err)
@@ -1343,7 +1672,8 @@ let updatingAll = false
 function updateAllTowns(btn, onDone) {
 	if (updatingAll) return
 	const ids = outdatedTowns()
-	if (!ids.length) {
+	// Nothing to do only when neither town data nor the basemap needs a refresh
+	if (!ids.length && !basemapNeeded()) {
 		if (onDone) onDone()
 		return
 	}
@@ -1352,10 +1682,19 @@ function updateAllTowns(btn, onDone) {
 	const total = ids.length
 	const done = []
 	const failed = []
+	const finishTowns = () => {
+		// After town data, fold in the basemap refresh (missing or outdated) as part of the same action
+		const complete = () => finishUpdateAll(done, failed, onDone)
+		if (basemapNeeded()) {
+			if (btn) btn.textContent = 'Descargando mapa…'
+			return ensureBasemap().then(complete, complete)
+		}
+		return complete()
+	}
 	const step = i => {
-		if (i >= ids.length) return finishUpdateAll(done, failed, onDone)
+		if (i >= ids.length) return finishTowns()
 		const townId = ids[i]
-		if (btn) btn.textContent = `Actualizando ${i + 1} de ${total}…`
+		if (btn) btn.textContent = total ? `Actualizando ${i + 1} de ${total}…` : 'Actualizando…'
 		return performTownUpdate(townId)
 			.then(({ name }) => done.push(name || townLabel(townId)))
 			.catch(err => {
@@ -1369,16 +1708,17 @@ function updateAllTowns(btn, onDone) {
 
 function finishUpdateAll(done, failed, onDone) {
 	updatingAll = false
-	// Re-render so the "Actualizar todo" button reflects the towns still pending (retry path)
+	// Re-render so the "Actualizar todo" button reflects what still needs updating (retry path)
 	renderDatos()
 	renderDatasetDots()
 	if (failed.length && done.length) {
 		toast(`Actualizadas ${done.length}, fallaron ${failed.length}: ${failed.join(', ')}`, 'warn')
 	} else if (failed.length) {
 		toast(`No se pudo actualizar: ${failed.join(', ')}`, 'error')
-	} else {
+	} else if (done.length) {
 		toast(`${done.length} ${done.length === 1 ? 'zona actualizada' : 'zonas actualizadas'}`, 'ok')
 	}
+	// A basemap-only run (done/failed empty) reports through its own status line/toast, not here
 	if (onDone) onDone()
 }
 
@@ -1393,7 +1733,10 @@ function confirmDeleteTown(btn, townId) {
 	btn.dataset.confirming = 'true'
 	const original = btn.textContent
 	const editedCount = (state.places.get(townId) || []).filter(p => p.edited).length
-	btn.textContent = editedCount ? `¿Borrar? Incluye ${editedCount} editados` : '¿Borrar? Confirmar'
+	const isLastTown = Object.keys(state.settings.towns).length === 1
+	if (editedCount) btn.textContent = `¿Borrar? Incluye ${editedCount} editados`
+	else if (isLastTown && state.basemapInstalled) btn.textContent = '¿Borrar? Quita el mapa sin conexión'
+	else btn.textContent = '¿Borrar? Confirmar'
 	const timer = setTimeout(() => {
 		btn.dataset.confirming = 'false'
 		btn.textContent = original
@@ -1409,6 +1752,10 @@ function deleteTown(townId) {
 			delete state.settings.towns[townId]
 			saveSettings()
 			state.places.delete(townId)
+			// Deleting the last town frees the shared offline basemap too (no town left to use it)
+			if (Object.keys(state.settings.towns).length === 0 && state.basemapInstalled) {
+				deleteBasemapBlob()
+			}
 			renderDatasetDots()
 			renderDatos()
 			toast(`${name} eliminado`, 'ok')
@@ -1499,8 +1846,9 @@ function renderDatos() {
 		const stored = state.settings.towns[id]
 		towns.push({ id, name: stored.name, version: stored.version, count: stored.count })
 	})
-	// One-tap update for everyone: only worth its own control when several zones are outdated
-	if (outdatedTowns().length > 1) {
+	// One-tap update: shown when several zones are outdated, or when the offline basemap still
+	// needs fetching/refreshing (which has no per-row button of its own)
+	if (outdatedTowns().length > 1 || basemapNeeded()) {
 		rows.push(
 			'<div class="datos-row datos-row--action">' +
 			'<button type="button" class="btn btn--primary btn--block" data-act="towns-update-all">Actualizar todo</button>' +
@@ -1512,6 +1860,7 @@ function renderDatos() {
 
 	el.datosList.innerHTML = rows.join('')
 	bindDatos()
+	renderBasemapStatus()
 }
 
 function townRowHtml(town) {
@@ -1587,6 +1936,7 @@ function enterPlacementMode() {
 	showListView()
 	if (!el.sheet.classList.contains('sheet--collapsed')) collapseSheet()
 	el.banner.hidden = false
+	refreshDatasetInteractivity()
 	toast('Toca el mapa donde está la dirección', 'ok')
 }
 
@@ -1598,6 +1948,7 @@ function exitPlacementMode() {
 	clearTempMarker()
 	showListView()
 	if (!el.sheet.classList.contains('sheet--collapsed')) collapseSheet()
+	refreshDatasetInteractivity()
 }
 
 function onMapClick(ev) {
@@ -1619,6 +1970,7 @@ function enterPlacementFromRemote(lat, lng, name, sub) {
 	openFormForNew()
 	el.fName.value = name || ''
 	el.fAddress.value = sub || ''
+	refreshDatasetInteractivity()
 }
 
 function prefillAddress(lat, lng) {
@@ -2020,7 +2372,8 @@ function maybeShowUpdatePrompt() {
 	if (updatePromptShown || !el.updatePrompt) return
 	if (!el.onboard.hidden) return
 	if (Object.keys(state.settings.towns).length === 0) return
-	if (!outdatedTowns().length) return
+	// Outdated town data OR a missing/outdated offline basemap both surface as the normal update state
+	if (!outdatedTowns().length && !basemapNeeded()) return
 	updatePromptShown = true
 	el.updatePrompt.hidden = false
 }
@@ -2168,6 +2521,9 @@ function initApp() {
 	state.settings = loadSettings()
 	initMap()
 	bindEvents()
+	// Read the stored basemap (if any) and switch to the offline vector layer -- read-only,
+	// never a hidden download. A missing basemap surfaces through the normal update UI instead.
+	loadBasemapState()
 	// Wait for the splash transition to finish so the modal never lands on top of it
 	setTimeout(maybeShowOnboarding, 450)
 	dbGetAll(CONFIG.db.store)

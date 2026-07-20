@@ -7,16 +7,25 @@
 
 'use strict'
 
-const CACHE_VERSION = 'last-mile-v3'
+const CACHE_VERSION = 'last-mile-v4'
 
-// The app shell. Datasets under data/ are NOT precached: they live in
-// IndexedDB and the app has its own offline fallback for the manifest.
+// The app shell. Datasets under data/ (incl. the offline basemap .pmtiles) are NOT precached:
+// they live in IndexedDB and the app owns their offline path. Vendored libraries (Leaflet, the
+// vector-basemap renderer) ARE precached so the app boots and the map inits with zero network.
 const SHELL = [
 	'./',
 	'index.html',
 	'styles.css',
 	'app.js',
 	'manifest.json',
+	'vendor/leaflet/leaflet.js',
+	'vendor/leaflet/leaflet.css',
+	'vendor/leaflet/images/marker-icon.png',
+	'vendor/leaflet/images/marker-icon-2x.png',
+	'vendor/leaflet/images/marker-shadow.png',
+	'vendor/leaflet/images/layers.png',
+	'vendor/leaflet/images/layers-2x.png',
+	'vendor/protomaps-leaflet.js',
 	'assets/kraken.png',
 	'assets/icon-192.png',
 	'assets/icon-512.png',
@@ -51,6 +60,9 @@ self.addEventListener('fetch', event => {
 	// Never intercept dataset/manifest requests -- the app owns their offline behaviour
 	const dataPath = new URL('data/', self.registration.scope).pathname
 	if (url.pathname.startsWith(dataPath)) return
+	// The offline basemap is a large blob the app stores in IndexedDB; never precache or intercept it
+	// (Range requests, big payload) even if it were ever served from outside data/
+	if (url.pathname.endsWith('.pmtiles')) return
 	event.respondWith(networkFirst(request))
 })
 

@@ -75,6 +75,8 @@ python3 -m http.server 8000
 
 > Sirve siempre por HTTP: abrir `index.html` como archivo rompe el service worker, IndexedDB y la geolocalización.
 
+> Mapa offline (base vectorial PMTiles para navegar sin cobertura): cómo se genera con `tools/build_basemap.py`, cómo servirlo en nginx (nunca comprimir el `.pmtiles`) y la atribución ODbL/OpenStreetMap obligatoria en [`docs/offline-map.md`](docs/offline-map.md). En local usa `python3 tools/dev_server.py 8000` (soporta peticiones Range, que `http.server` no).
+
 La arquitectura se apoya en tres capas de persistencia: `addresses` (IndexedDB — tus puntos), `places` (IndexedDB — puntos oficiales por población, con ediciones marcadas) y `localStorage` (ajustes y visibilidad). El detalle completo está en [CLAUDE.md](CLAUDE.md).
 
 ## Créditos y atribuciones

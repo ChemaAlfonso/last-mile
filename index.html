@@ -133,9 +133,7 @@
 		/>
 		<link
 			rel="stylesheet"
-			href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-			integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-			crossorigin=""
+			href="vendor/leaflet/leaflet.css"
 		/>
 		<link
 			rel="stylesheet"
@@ -662,7 +660,11 @@
 							id="datosList"
 							class="datos__list"
 						></div>
-						<p class="datos__hint">La visibilidad controla el mapa y la búsqueda de cada población.</p>
+						<p
+							id="basemapStatus"
+							class="datos__hint datos__hint--basemap"
+							hidden
+						></p>
 					</section>
 
 					<section class="settings__group">
@@ -792,11 +794,10 @@
 			aria-atomic="false"
 		></div>
 
-		<script
-			src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-			integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-			crossorigin=""
-		></script>
+		<script src="vendor/leaflet/leaflet.js"></script>
+		<!-- Offline vector basemap renderer (protomaps-leaflet, bundled pmtiles, BSD-3). Optional:
+		     the app falls back to OSM raster when this or the downloaded basemap is absent. -->
+		<script src="vendor/protomaps-leaflet.js"></script>
 		<script src="app.js"></script>
 	</body>
 </html>
