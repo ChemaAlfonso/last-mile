@@ -2,3 +2,4 @@
 .playwright-mcp/
 __pycache__/
 data/*.pmtiles
+data/graph-comarca.json
