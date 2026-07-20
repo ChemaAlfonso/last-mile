@@ -10,13 +10,14 @@ Last Mile is a client-only PWA (no build step, no bundler, no backend) for deliv
 
 - **Run locally**: serve the repo root over HTTP (any static server — e.g. `python3 -m http.server 8000`). Opening `index.html` via `file://` breaks the service worker, IndexedDB persistence, and geolocation.
 - **Rebuild a town dataset**: `python3 tools/build_dataset.py <municipality_code> <town_id> <town_display_name>` — downloads the Catastro INSPIRE Addresses GML for that municipality, filters/cleans rural addresses, writes `data/<town_id>.json` and updates `data/index.json`. Pass `--gml <path>` to skip the download and use a local GML file. Standard library only; no pip deps.
+- **Rebuild the offline basemap / routing graph**: `python3 tools/build_basemap.py` and `python3 tools/build_routing.py` — both derive their bbox from every point in `data/*.json`, so run them after adding towns, then bump `basemap.version` / `graph.version` (and each `size`) in `data/index.json` or installed copies never refresh. Full recipe: `docs/growth.md`.
 - **No test suite**: verification is done in a real browser (Playwright/Chrome MCP), not with unit tests. When changing runtime behaviour, exercise the affected flow end-to-end.
 
 ## Architecture
 
 ### Three-tier persistence model
 
-The runtime logic is split across plain, globals-sharing script files loaded in order (no modules/bundler): `js/config.js` (CONFIG + top-level constants), `js/db.js` (IndexedDB + settings), `js/map.js` (map, base/vector layers, dataset dots, geolocation), `js/search.js` (geocoding, search/matching, partida browser), `js/towns.js` (town download/update/delete, datos UI, import/export backup), then `app.js` (state + el, save flow, list, sheet/onboarding, init — loaded last, ends with `initShell()`). All share one global scope; index.html loads them after the vendor scripts.
+The runtime logic is split across plain, globals-sharing script files loaded in order (no modules/bundler): `js/config.js` (CONFIG + top-level constants), `js/db.js` (IndexedDB + settings), `js/map.js` (map, base/vector layers, dataset dots, geolocation, graph plumbing + offline navigation), `js/search.js` (geocoding, search/matching, partida browser), `js/towns.js` (town download/update/delete, datos UI, import/export backup), `js/routing.js` (offline routing engine — self-contained IIFE), then `app.js` (state + el, save flow, list, sheet/onboarding, init — loaded last, ends with `initShell()`). All share one global scope; index.html loads them after the vendor scripts.
 
 The app juggles three storage layers with distinct semantics — this is the single most important thing to internalize before touching this logic:
 
@@ -51,6 +52,10 @@ Official points render as `L.circleMarker` on a single shared `L.canvas` rendere
 ### Placement mode is a state machine
 
 `state.placementMode` combined with `editingId` (own address) or `editingPlaceId` (official point) drives four flows: new-from-map, new-from-remote-search, edit-own, edit-official. `onMapClick` branches on these: while editing, a map tap only moves the temp marker; while creating new, it also opens the form and reverse-geocodes to prefill. Keep this branching intact — collapsing it re-introduces the "tapping the map while editing wipes the form" bug.
+
+### Offline routing ("Ruta sin conexión")
+
+Three pieces with frozen seams. (1) **Engine** `js/routing.js`: a self-contained IIFE exposing exactly four globals — `initRoutingGraph(graphJson)`, `routingReady()`, `computeRoute(fromLat, fromLng, toLat, toLng)`, `nearestOnRoute(route, lat, lng)`. Edge-based A* (search state = directed edge) so OSM turn restrictions (graph v2 `restrictions` table) and the ≥150° reversal penalty are exact and unbypassable; accepts `formatVersion` 1 AND 2 (v1 graphs may linger in drivers' IndexedDB). Never call it blind — guard with `typeof initRoutingGraph !== 'undefined' && routingReady()`. (2) **Graph** `data/graph-comarca.json`: built by `tools/build_routing.py` from OSM/Overpass, versioned through the manifest `graph` key exactly like the basemap; stored as raw text in the `routing` IDB store and JSON.parsed lazily on first navigation (never at boot). Rebuilding the graph = bump `graph.version` + `size` in `data/index.json`. (3) **Navigation UI** in `js/map.js`: `state.navigation` session (route layers, watchPosition, wake lock, anchored follow, guidance banner); it must never fight `placementMode`, and `stopNavigation()` is the single teardown path — dataset dots and own pins hide while navigating (guards in `renderDatasetDots`/`rebuildMarkers`) and are restored there. Displayed ETA pads engine free-flow time (`etaFactor`/`etaTurnS`); the heading arrow only appears after verified movement (`headingMinSpeedMs`/`headingMinMoveM`).
 
 ### Dataset builder specifics
 

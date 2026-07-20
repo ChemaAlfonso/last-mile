@@ -30,8 +30,12 @@ whenever any declared version is newer than what their device stores.
 3. **Rebuild the basemap**: `python3 tools/build_basemap.py`. Its bbox is derived
    from every point in `data/*.json` plus a margin, so it grows to cover the new
    town automatically.
-4. **Rebuild the graph**: `python3 tools/build_routing.py`. Same auto-bbox.
-   Run its verification checklist (see offline-routing.md) before shipping.
+4. **Rebuild the graph**: `python3 tools/build_routing.py`. Same auto-bbox; OSM
+   turn restrictions are fetched and encoded automatically (format v2). Run its
+   verification checklist (see offline-routing.md) before shipping. Overpass
+   responses are cached under `tools/.overpass-cache/` — rebuilds from cache take
+   seconds; delete the cache dir when you want fresh OSM data (roads AND
+   restrictions come from the same snapshot).
 5. **Bump versions in `data/index.json`**: town versions are already handled by
    the builder; raise `basemap.version` and `graph.version` by 1 and update each
    `size` to the new byte counts (`wc -c` on the files). If you skip this, users
