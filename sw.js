@@ -7,7 +7,7 @@
 
 'use strict'
 
-const CACHE_VERSION = 'last-mile-v2'
+const CACHE_VERSION = 'last-mile-v3'
 
 // The app shell. Datasets under data/ are NOT precached: they live in
 // IndexedDB and the app has its own offline fallback for the manifest.

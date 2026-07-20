@@ -258,6 +258,50 @@
 								/>
 							</svg>
 						</a>
+						<button
+							id="splashShare"
+							class="splash__share"
+							type="button"
+							aria-label="Compartir Last Mile"
+						>
+							<svg
+								viewBox="0 0 24 24"
+								aria-hidden="true"
+							>
+								<circle
+									cx="18"
+									cy="5"
+									r="2.5"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+								/>
+								<circle
+									cx="6"
+									cy="12"
+									r="2.5"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+								/>
+								<circle
+									cx="18"
+									cy="19"
+									r="2.5"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+								/>
+								<path
+									d="M8.2 10.8l7.6-4.3M8.2 13.2l7.6 4.3"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+								/>
+							</svg>
+							<span>Compartir</span>
+						</button>
 					</div>
 				</footer>
 			</div>
@@ -689,6 +733,51 @@
 							type="button"
 						>
 							Abrir ajustes
+						</button>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Update prompt (shown once per boot when downloaded zones have a newer dataset) -->
+		<div
+			id="updatePrompt"
+			class="onboard"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="updatePromptTitle"
+			hidden
+		>
+			<div class="onboard__card">
+				<div
+					class="onboard__stripe"
+					aria-hidden="true"
+				></div>
+				<div class="onboard__body">
+					<h2
+						id="updatePromptTitle"
+						class="onboard__title"
+					>
+						Hay actualizaciones de tus zonas
+					</h2>
+					<p class="onboard__text">
+						Los datos de reparto de tus zonas descargadas han mejorado: nombres más claros y más puntos.
+						Actualízalos para tenerlos al día. Tus correcciones se conservan.
+					</p>
+					<div class="onboard__actions">
+						<button
+							id="updatePromptDismiss"
+							class="btn btn--ghost"
+							type="button"
+						>
+							Ahora no
+						</button>
+						<button
+							id="updatePromptGo"
+							class="btn btn--primary"
+							type="button"
+						>
+							Actualizar
 						</button>
 					</div>
 				</div>

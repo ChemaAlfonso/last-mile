@@ -131,6 +131,10 @@ button {
 	background: var(--danger);
 }
 
+.btn--block {
+	width: 100%;
+}
+
 /* ---------- Search ---------- */
 
 .search {
@@ -658,6 +662,13 @@ button {
 	background: var(--paper);
 	border: var(--border) solid var(--line);
 	border-radius: var(--radius);
+}
+
+.datos-row--action {
+	padding: 0;
+	background: transparent;
+	border: none;
+	border-radius: 0;
 }
 
 .datos-row__head {
@@ -1291,7 +1302,36 @@ button {
 
 .splash__contact {
 	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: center;
 	gap: 12px;
+}
+
+.splash__share {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	height: 46px;
+	padding: 0 20px;
+	font-size: 15px;
+	font-weight: 600;
+	color: var(--accent-ink);
+	background: var(--accent);
+	border: var(--border) solid var(--accent);
+	border-radius: 999px;
+	box-shadow: var(--shadow-sm);
+	transition: transform 0.08s var(--ease), box-shadow 0.08s var(--ease), background 0.12s;
+}
+
+.splash__share:active {
+	transform: translate(2px, 2px);
+	box-shadow: 0 0 0 var(--ink);
+}
+
+.splash__share svg {
+	width: 20px;
+	height: 20px;
 }
 
 .iconlink {

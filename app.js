@@ -242,7 +242,9 @@ const state = {
 	canvasRenderer: null,
 	dotsTimer: null,
 	pendingFocusPlaceId: null,
-	zoomHintShown: false
+	zoomHintShown: false,
+	lastSearch: null,
+	partidaReturn: null
 }
 
 /* ---------- dom ---------- */
@@ -279,9 +281,13 @@ const el = {
 	toasts: document.getElementById('toasts'),
 	splash: document.getElementById('splash'),
 	splashStart: document.getElementById('splashStart'),
+	splashShare: document.getElementById('splashShare'),
 	onboard: document.getElementById('onboard'),
 	onboardSettings: document.getElementById('onboardSettings'),
-	onboardDismiss: document.getElementById('onboardDismiss')
+	onboardDismiss: document.getElementById('onboardDismiss'),
+	updatePrompt: document.getElementById('updatePrompt'),
+	updatePromptGo: document.getElementById('updatePromptGo'),
+	updatePromptDismiss: document.getElementById('updatePromptDismiss')
 }
 
 let map = null
@@ -611,21 +617,52 @@ function localMatches(query) {
 		.slice(0, CONFIG.search.localLimit)
 }
 
-function datasetMatches(query) {
+function parseQuery(query) {
+	// Split a trailing pure-number token off as a num filter: 'cachap 10' -> name 'cachap', num '10'.
+	// The num is matched by prefix on the place number (10 -> 10, 100, 1000), so non-numeric
+	// numbers such as 'S/N' never match a numeric filter.
 	const tokens = tokenize(query)
-	if (!tokens.length) return []
-	const out = []
+	let numFilter = ''
+	if (tokens.length && /^\d+$/.test(tokens[tokens.length - 1])) {
+		numFilter = tokens.pop()
+	}
+	return { nameTokens: tokens, numFilter }
+}
+
+function numMatchesPrefix(num, prefix) {
+	return String(num == null ? '' : num).startsWith(prefix)
+}
+
+function datasetGroupMatches(query) {
+	const { nameTokens, numFilter } = parseQuery(query)
+	if (!nameTokens.length && !numFilter) return []
+	const byKey = new Map()
+	const groups = []
 	activeTowns().forEach(town => {
-		if (out.length >= CONFIG.dataset.resultLimit) return
 		const places = state.places.get(town) || []
 		for (let i = 0; i < places.length; i++) {
-			if (haystackMatches(places[i].hay, tokens)) {
-				out.push(places[i])
-				if (out.length >= CONFIG.dataset.resultLimit) break
+			const place = places[i]
+			if (nameTokens.length && !haystackMatches(place.hay, nameTokens)) continue
+			if (numFilter && !numMatchesPrefix(place.num, numFilter)) continue
+			const key = town + '\n' + place.partida
+			let group = byKey.get(key)
+			if (!group) {
+				group = { town, partida: place.partida, places: [], numFilter }
+				byKey.set(key, group)
+				groups.push(group)
 			}
+			group.places.push(place)
 		}
 	})
-	return out
+	// Exact normalized-partida match first, then most matches, then alphabetical
+	const exact = normalize(nameTokens.join(' '))
+	groups.sort(
+		(a, b) =>
+			(normalize(b.partida) === exact) - (normalize(a.partida) === exact) ||
+			b.places.length - a.places.length ||
+			a.partida.localeCompare(b.partida, 'es')
+	)
+	return groups.slice(0, CONFIG.dataset.resultLimit)
 }
 
 function onSearchInput() {
@@ -640,7 +677,7 @@ function onSearchInput() {
 		showPartidaBrowser()
 		return
 	}
-	renderResults(localMatches(query), datasetMatches(query), null)
+	renderResults(localMatches(query), datasetGroupMatches(query), null)
 	if (query.length >= CONFIG.search.minQueryLength) {
 		searchTimer = setTimeout(() => runRemoteSearch(query), CONFIG.search.debounceMs)
 	}
@@ -652,21 +689,29 @@ function runRemoteSearch(query) {
 	searchRemote(query, controller.signal)
 		.then(remote => {
 			if (controller.signal.aborted) return
-			renderResults(localMatches(query), datasetMatches(query), remote)
+			renderResults(localMatches(query), datasetGroupMatches(query), remote)
 		})
 		.catch(err => {
 			if (err.name === 'AbortError') return
-			renderResults(localMatches(query), datasetMatches(query), 'offline')
+			renderResults(localMatches(query), datasetGroupMatches(query), 'offline')
 		})
 }
 
-function renderResults(local, places, remote) {
+function renderResults(local, groups, remote) {
+	// Keep the raw inputs so back-navigation from a partida drill-down can rebuild this exact list
+	state.lastSearch = { local, groups, remote }
 	const parts = []
 	local.forEach(a => {
 		parts.push(resultRow('saved', a.id, a.name, a.address || formatCoords(a.lat, a.lng), a.lat, a.lng, 'Guardada'))
 	})
-	;(places || []).forEach(p => {
-		parts.push(resultRow('place', p.id, p.name, placeSubtitle(p), p.lat, p.lng, townLabel(p.town)))
+	;(groups || []).forEach((group, index) => {
+		if (group.places.length === 1) {
+			// A single matching place is a direct hit -- no need to make the driver drill down
+			const place = group.places[0]
+			parts.push(resultRow('place', place.id, place.name, placeSubtitle(place), place.lat, place.lng, townLabel(place.town)))
+		} else {
+			parts.push(partidaRow(group, index))
+		}
 	})
 	if (Array.isArray(remote)) {
 		remote.forEach((r, i) => {
@@ -684,6 +729,14 @@ function renderResults(local, places, remote) {
 	el.results.querySelectorAll('.result[data-kind]').forEach(node =>
 		node.addEventListener('click', () => onResultClick(node))
 	)
+	el.results.querySelectorAll('[data-group]').forEach(node =>
+		node.addEventListener('click', () => drillIntoPartida(groups[Number(node.getAttribute('data-group'))], renderLastSearch))
+	)
+}
+
+function renderLastSearch() {
+	const last = state.lastSearch
+	if (last) renderResults(last.local, last.groups, last.remote)
 }
 
 function resultRow(kind, ref, name, sub, lat, lng, badgeText) {
@@ -776,6 +829,34 @@ function addressCountLabel(count) {
 	return count === 1 ? '1 dirección' : `${count} direcciones`
 }
 
+function compareNum(a, b) {
+	// Numeric-leading numbers first (natural order), non-numeric ones (e.g. 'S/N') grouped at the end
+	const na = String(a == null ? '' : a)
+	const nb = String(b == null ? '' : b)
+	const da = /^\d/.test(na)
+	const db = /^\d/.test(nb)
+	if (da !== db) return da ? -1 : 1
+	return na.localeCompare(nb, 'es', { numeric: true })
+}
+
+function partidaRow(group, index) {
+	return (
+		`<button type="button" class="result" data-group="${index}">` +
+		'<div class="result__main">' +
+		`<div class="result__name">${escapeHtml(group.partida)}</div>` +
+		`<div class="result__sub">${addressCountLabel(group.places.length)}</div>` +
+		'</div>' +
+		`<span class="badge badge--town">${escapeHtml(townLabel(group.town))}</span>` +
+		'</button>'
+	)
+}
+
+function drillIntoPartida(group, backRender) {
+	// Remember how to rebuild the list we came from, and where it was scrolled, so back restores both
+	state.partidaReturn = { render: backRender, scrollTop: el.results.scrollTop }
+	showPartidaNumbers(group)
+}
+
 function showPartidaBrowser() {
 	const groups = partidaGroups()
 	if (groups.length === 0) {
@@ -783,28 +864,16 @@ function showPartidaBrowser() {
 		return
 	}
 	const parts = ['<div class="result result--muted">Elige una partida</div>']
-	groups.forEach((group, index) => {
-		parts.push(
-			`<button type="button" class="result" data-group="${index}">` +
-			'<div class="result__main">' +
-			`<div class="result__name">${escapeHtml(group.partida)}</div>` +
-			`<div class="result__sub">${addressCountLabel(group.places.length)}</div>` +
-			'</div>' +
-			`<span class="badge badge--town">${escapeHtml(townLabel(group.town))}</span>` +
-			'</button>'
-		)
-	})
+	groups.forEach((group, index) => parts.push(partidaRow(group, index)))
 	el.results.innerHTML = parts.join('')
 	el.results.hidden = false
 	el.results.querySelectorAll('[data-group]').forEach(node =>
-		node.addEventListener('click', () => showPartidaNumbers(groups[Number(node.getAttribute('data-group'))]))
+		node.addEventListener('click', () => drillIntoPartida(groups[Number(node.getAttribute('data-group'))], showPartidaBrowser))
 	)
 }
 
 function showPartidaNumbers(group) {
-	const places = group.places
-		.slice()
-		.sort((a, b) => String(a.num).localeCompare(String(b.num), 'es', { numeric: true }))
+	const places = group.places.slice().sort((a, b) => compareNum(a.num, b.num))
 	const chips = places
 		.map(p => `<button type="button" class="numchip" data-place="${escapeHtml(p.id)}">${escapeHtml(p.num)}</button>`)
 		.join('')
@@ -818,13 +887,24 @@ function showPartidaNumbers(group) {
 		'</button>' +
 		`<div class="results__nums">${chips}</div>`
 	el.results.hidden = false
-	el.results.querySelector('[data-back]').addEventListener('click', showPartidaBrowser)
+	el.results.scrollTop = 0
+	el.results.querySelector('[data-back]').addEventListener('click', () => {
+		const ret = state.partidaReturn
+		state.partidaReturn = null
+		if (ret && ret.render) {
+			ret.render()
+			el.results.scrollTop = ret.scrollTop
+		} else {
+			showPartidaBrowser()
+		}
+	})
 	el.results.querySelectorAll('[data-place]').forEach(node =>
 		node.addEventListener('click', () => {
 			const place = findPlaceById(node.getAttribute('data-place'))
 			hideResults()
 			clearSearch()
 			el.searchInput.blur()
+			state.partidaReturn = null
 			if (place) focusPlace(place)
 		})
 	)
@@ -1140,14 +1220,22 @@ function downloadTown(townId, btn) {
 		})
 }
 
-function updateTown(townId, btn) {
+function outdatedTowns() {
+	// Downloaded towns whose manifest version is newer than what is stored on this device
+	return state.manifest.towns
+		.filter(t => {
+			const stored = state.settings.towns[t.id]
+			return stored && Number(t.version) > Number(stored.version)
+		})
+		.map(t => t.id)
+}
+
+function performTownUpdate(townId) {
+	// Core update path shared by the per-town button and the "update all" flow.
+	// Edited records are preserved inside importTownData; never reimplement that here.
 	const entry = state.manifest.towns.find(t => t.id === townId)
-	if (!entry) return
-	if (btn) {
-		btn.disabled = true
-		btn.textContent = 'Actualizando…'
-	}
-	fetch(CONFIG.dataset.fileBase + entry.file, { cache: 'no-cache' })
+	if (!entry) return Promise.reject(new Error('no-manifest-entry'))
+	return fetch(CONFIG.dataset.fileBase + entry.file, { cache: 'no-cache' })
 		.then(res => {
 			if (!res.ok) throw new Error(`HTTP ${res.status}`)
 			return res.json()
@@ -1159,8 +1247,19 @@ function updateTown(townId, btn) {
 			stored.count = data.count
 			stored.name = data.name
 			saveSettings()
+			return { name: data.name, count: data.count, kept }
+		})
+}
+
+function updateTown(townId, btn) {
+	if (btn) {
+		btn.disabled = true
+		btn.textContent = 'Actualizando…'
+	}
+	performTownUpdate(townId)
+		.then(({ count, kept }) => {
 			const keptText = kept ? `, ${formatMiles(kept)} ediciones conservadas` : ''
-			toast(`Actualizado: ${formatMiles(data.count)} puntos${keptText}`, 'ok')
+			toast(`Actualizado: ${formatMiles(count)} puntos${keptText}`, 'ok')
 			renderDatos()
 			renderDatasetDots()
 		})
@@ -1169,6 +1268,50 @@ function updateTown(townId, btn) {
 			toast('No se pudo actualizar', 'error')
 			renderDatos()
 		})
+}
+
+let updatingAll = false
+
+function updateAllTowns(btn, onDone) {
+	if (updatingAll) return
+	const ids = outdatedTowns()
+	if (!ids.length) {
+		if (onDone) onDone()
+		return
+	}
+	updatingAll = true
+	if (btn) btn.disabled = true
+	const total = ids.length
+	const done = []
+	const failed = []
+	const step = i => {
+		if (i >= ids.length) return finishUpdateAll(done, failed, onDone)
+		const townId = ids[i]
+		if (btn) btn.textContent = `Actualizando ${i + 1} de ${total}…`
+		return performTownUpdate(townId)
+			.then(({ name }) => done.push(name || townLabel(townId)))
+			.catch(err => {
+				console.error(err)
+				failed.push(townLabel(townId))
+			})
+			.then(() => step(i + 1))
+	}
+	step(0)
+}
+
+function finishUpdateAll(done, failed, onDone) {
+	updatingAll = false
+	// Re-render so the "Actualizar todo" button reflects the towns still pending (retry path)
+	renderDatos()
+	renderDatasetDots()
+	if (failed.length && done.length) {
+		toast(`Actualizadas ${done.length}, fallaron ${failed.length}: ${failed.join(', ')}`, 'warn')
+	} else if (failed.length) {
+		toast(`No se pudo actualizar: ${failed.join(', ')}`, 'error')
+	} else {
+		toast(`${done.length} ${done.length === 1 ? 'zona actualizada' : 'zonas actualizadas'}`, 'ok')
+	}
+	if (onDone) onDone()
 }
 
 function confirmDeleteTown(btn, townId) {
@@ -1287,6 +1430,15 @@ function renderDatos() {
 		const stored = state.settings.towns[id]
 		towns.push({ id, name: stored.name, version: stored.version, count: stored.count })
 	})
+	// One-tap update for everyone: only worth its own control when several zones are outdated
+	if (outdatedTowns().length > 1) {
+		rows.push(
+			'<div class="datos-row datos-row--action">' +
+			'<button type="button" class="btn btn--primary btn--block" data-act="towns-update-all">Actualizar todo</button>' +
+			'</div>'
+		)
+	}
+
 	towns.forEach(t => rows.push(townRowHtml(t)))
 
 	el.datosList.innerHTML = rows.join('')
@@ -1345,6 +1497,8 @@ function bindDatos() {
 			node.addEventListener('click', () => downloadTown(townId, node))
 		} else if (act === 'town-update') {
 			node.addEventListener('click', () => updateTown(townId, node))
+		} else if (act === 'towns-update-all') {
+			node.addEventListener('click', () => updateAllTowns(node))
 		} else if (act === 'town-delete') {
 			node.addEventListener('click', () => confirmDeleteTown(node, townId))
 		}
@@ -1789,6 +1943,28 @@ function openOnboardingSettings() {
 	showSettingsView()
 }
 
+let updatePromptShown = false
+
+function maybeShowUpdatePrompt() {
+	// Proactive nudge when downloaded zones have a newer dataset. Shown at most once per boot,
+	// never while onboarding is due or open, and never stacked on another modal.
+	if (updatePromptShown || !el.updatePrompt) return
+	if (!el.onboard.hidden) return
+	if (Object.keys(state.settings.towns).length === 0) return
+	if (!outdatedTowns().length) return
+	updatePromptShown = true
+	el.updatePrompt.hidden = false
+}
+
+function dismissUpdatePrompt() {
+	el.updatePrompt.hidden = true
+}
+
+function runUpdatePromptUpdate() {
+	// Reuse the shared update-all path; show progress on the modal button, then close on completion
+	updateAllTowns(el.updatePromptGo, dismissUpdatePrompt)
+}
+
 /* ---------- init ---------- */
 
 function bindEvents() {
@@ -1843,6 +2019,9 @@ function bindEvents() {
 
 	el.onboardSettings.addEventListener('click', openOnboardingSettings)
 	el.onboardDismiss.addEventListener('click', dismissOnboarding)
+
+	if (el.updatePromptGo) el.updatePromptGo.addEventListener('click', runUpdatePromptUpdate)
+	if (el.updatePromptDismiss) el.updatePromptDismiss.addEventListener('click', dismissUpdatePrompt)
 }
 
 let appStarted = false
@@ -1852,6 +2031,48 @@ let appStarted = false
 function initShell() {
 	registerServiceWorker()
 	el.splashStart.addEventListener('click', startApp)
+	if (el.splashShare) el.splashShare.addEventListener('click', shareApp)
+}
+
+const SHARE_URL = 'https://lastmile.chemaalfonso.com'
+
+function shareApp() {
+	const data = { title: 'Last Mile', text: 'Direcciones rurales que no aparecen en el mapa', url: SHARE_URL }
+	if (navigator.share) {
+		// The native sheet handles its own cancel; only fall back when sharing is unavailable
+		navigator.share(data).catch(() => {})
+		return
+	}
+	copyShareUrl()
+}
+
+function copyShareUrl() {
+	if (navigator.clipboard && navigator.clipboard.writeText) {
+		navigator.clipboard
+			.writeText(SHARE_URL)
+			.then(() => toast('Enlace copiado', 'ok'))
+			.catch(fallbackCopyShareUrl)
+		return
+	}
+	fallbackCopyShareUrl()
+}
+
+function fallbackCopyShareUrl() {
+	// execCommand copy works where the async clipboard API is blocked (older webviews, no permission)
+	try {
+		const area = document.createElement('textarea')
+		area.value = SHARE_URL
+		area.setAttribute('readonly', '')
+		area.style.position = 'absolute'
+		area.style.left = '-9999px'
+		document.body.appendChild(area)
+		area.select()
+		document.execCommand('copy')
+		document.body.removeChild(area)
+		toast('Enlace copiado', 'ok')
+	} catch (err) {
+		toast('No se pudo copiar el enlace', 'error')
+	}
 }
 
 function registerServiceWorker() {
@@ -1898,6 +2119,7 @@ function initApp() {
 			renderDatos()
 			// Silent: nudging "acércate" on every app open would be noise, not help
 			renderDatasetDots(true)
+			maybeShowUpdatePrompt()
 		})
 		.catch(err => {
 			console.error(err)
