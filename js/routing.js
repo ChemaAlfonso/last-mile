@@ -17,7 +17,10 @@
 
 	// --- Tunables ---------------------------------------------------------
 	const EXPECTED_FORMAT = 'lastmile-routing-graph'
-	const EXPECTED_VERSION = 1
+	// v1 has no turn restrictions; v2 adds the `restrictions` table. Both are
+	// accepted so an updated app shell can still open a not-yet-rebuilt v1 graph
+	// left in a driver's IndexedDB during the deploy-transition window.
+	const SUPPORTED_VERSIONS = [1, 2]
 
 	const EARTH_R = 6371000 // metres, mean radius for haversine
 	const M_PER_DEG_LAT = 111320 // metres per degree of latitude (local-plane approx)
@@ -63,11 +66,14 @@
 	let edgesName = null
 	let names = null
 
-	// CSR directed adjacency
+	// CSR directed adjacency. A "directed edge" is identified by its CSR index p
+	// (0..D-1); it is also an A* search state (see astar).
+	let DD = 0 // directed-edge count (length of the adj* arrays)
 	let adjHead = null // Int32Array(NN+1)
-	let adjTo = null // Int32Array(D)
+	let adjTo = null // Int32Array(D) — head node of directed edge p
+	let adjFrom = null // Int32Array(D) — tail node of directed edge p (for turn geometry)
 	let adjCost = null // Int32Array(D)
-	let adjEdge = null // Int32Array(D)
+	let adjEdge = null // Int32Array(D) — undirected edge column index behind directed edge p
 
 	let degU = null // Uint16Array(NN) — undirected degree, for junction detection
 	let inScc = null // Uint8Array(NN) — membership of the largest SCC
@@ -78,13 +84,18 @@
 
 	let maxSpeedMs = 0 // fastest class in the speed table, for the A* heuristic
 
-	// A* working state, kept persistent and stamped by generation to avoid
-	// clearing 288k-entry arrays on every query.
-	let gScore = null // Float64Array(NN)
-	let cameFrom = null // Int32Array(NN)
-	let cameEdge = null // Int32Array(NN)
-	let seenGen = null // Int32Array(NN) — gScore valid only when seenGen[i] === gen
-	let closedGen = null // Int32Array(NN)
+	// Turn restrictions: banned (via node, from undirected-edge, to undirected-edge)
+	// transitions. Indexed by via node → Set of packed (from,to) keys for O(1) lookup.
+	let restrictionsByVia = null // Map<number, Set<number>>
+	let hasRestrictions = false
+	let ftStride = 1 // packing stride for (from,to) → from*ftStride + to (stays < 2^53)
+
+	// A* working state over directed-edge states, kept persistent and stamped by
+	// generation to avoid clearing D-length arrays on every query.
+	let gScoreE = null // Float64Array(D)
+	let cameStateE = null // Int32Array(D) — predecessor directed-edge state, or -1 at start
+	let seenGenE = null // Int32Array(D) — gScoreE valid only when seenGenE[p] === gen
+	let closedGenE = null // Int32Array(D)
 	let gen = 0
 
 	// --- Geometry helpers -------------------------------------------------
@@ -160,7 +171,9 @@
 		adjHead = new Int32Array(NN + 1)
 		for (let i = 0; i < NN; i++) adjHead[i + 1] = adjHead[i] + outDeg[i]
 		const D = adjHead[NN]
+		DD = D
 		adjTo = new Int32Array(D)
+		adjFrom = new Int32Array(D)
 		adjCost = new Int32Array(D)
 		adjEdge = new Int32Array(D)
 
@@ -171,15 +184,39 @@
 			const c = edgesCost[e]
 			let p = adjHead[na] + cursor[na]++
 			adjTo[p] = nb
+			adjFrom[p] = na
 			adjCost[p] = c
 			adjEdge[p] = e
 			if (dir[e] === 0) {
 				p = adjHead[nb] + cursor[nb]++
 				adjTo[p] = na
+				adjFrom[p] = nb
 				adjCost[p] = c
 				adjEdge[p] = e
 			}
 		}
+	}
+
+	// Index the turn-restriction table (v2). v1 graphs have none — leaving the
+	// map empty makes hasRestrictions false and skips all lookups in the hot loop.
+	function buildRestrictions(g, edgeCount) {
+		restrictionsByVia = new Map()
+		hasRestrictions = false
+		ftStride = edgeCount + 1 // from,to < edgeCount → packed key stays a safe integer
+		const r = g.restrictions
+		if (!r || !r.via || r.via.length === 0) return
+		const via = r.via
+		const from = r.from
+		const to = r.to
+		for (let k = 0; k < via.length; k++) {
+			let set = restrictionsByVia.get(via[k])
+			if (!set) {
+				set = new Set()
+				restrictionsByVia.set(via[k], set)
+			}
+			set.add(from[k] * ftStride + to[k])
+		}
+		hasRestrictions = restrictionsByVia.size > 0
 	}
 
 	// Iterative Tarjan over the directed adjacency; marks membership of the
@@ -389,8 +426,19 @@
 		}
 	}
 
-	// Returns { nodes:[...ids], edges:[...edgeIdx] } or null. edges[i] joins
-	// nodes[i] and nodes[i+1].
+	// Edge-based A*. A search STATE is a directed edge (its CSR index p) — "just
+	// traversed edge p, now standing at its head node". Modelling the arriving
+	// edge, not just the node, is what makes turn restrictions and the reversal
+	// penalty EXACT: both are properties of the (incoming edge, outgoing edge)
+	// pair at the via node, which a single g-score per node cannot represent. A
+	// node-based search fixes one predecessor per node and can therefore wrongly
+	// report "no route" at a restricted junction (its only settled approach forbids
+	// the needed onward turn while a costlier approach would allow it). Edge states
+	// cost ~2x memory (arrays sized by directed-edge count) and expand a few times
+	// more states — still well inside budget on this graph.
+	//
+	// Returns { nodes:[...ids], edges:[...edgeIdx] } or null. edges[i] is the
+	// undirected edge joining nodes[i] and nodes[i+1].
 	function astar(start, goal) {
 		if (start === goal) return { nodes: [start], edges: [] }
 
@@ -399,61 +447,67 @@
 		const goalLng = nodesLng[goal]
 		const heap = makeHeap()
 
-		gScore[start] = 0
-		seenGen[start] = gen
-		heap.push(start, heuristic(start, goalLat, goalLng))
+		// Seed with every directed edge leaving the start node. The depart hop has
+		// no incoming edge, so it carries neither a reversal penalty nor a restriction.
+		const startEnd = adjHead[start + 1]
+		for (let p = adjHead[start]; p < startEnd; p++) {
+			gScoreE[p] = adjCost[p]
+			seenGenE[p] = gen
+			cameStateE[p] = -1
+			heap.push(p, adjCost[p] + heuristic(adjTo[p], goalLat, goalLng))
+		}
 
+		let finalState = -1
 		while (heap.size > 0) {
-			const u = heap.pop()
-			if (closedGen[u] === gen) continue // stale duplicate
-			closedGen[u] = gen
-			if (u === goal) break
-			const gu = gScore[u]
+			const p = heap.pop()
+			if (closedGenE[p] === gen) continue // stale duplicate
+			closedGenE[p] = gen
+			const u = adjTo[p] // node we are standing at, having arrived via edge p
+			if (u === goal) {
+				finalState = p
+				break
+			}
+			const gp = gScoreE[p]
 			const uLat = nodesLat[u]
 			const uLng = nodesLng[u]
-			// Incoming heading into u (from the predecessor fixed when u settled). The
-			// depart hop has no predecessor — we do not know the driver's orientation,
-			// so no reversal penalty is charged leaving the start node. This is the
-			// "with-parent" approximation: pinning the predecessor at settle time can
-			// break strict optimality in rare multi-approach configurations, but it is
-			// O(1) extra work per relaxation and resolves the dual-carriageway hairpin,
-			// which the far heavier edge-based state expansion would too.
-			const hasIn = u !== start
-			const inB = hasIn ? bearing(nodesLat[cameFrom[u]], nodesLng[cameFrom[u]], uLat, uLng) : 0
+			const fromEdge = adjEdge[p]
+			const inB = bearing(nodesLat[adjFrom[p]], nodesLng[adjFrom[p]], uLat, uLng)
+			const banned = hasRestrictions ? restrictionsByVia.get(u) : undefined
 			const end = adjHead[u + 1]
-			for (let e = adjHead[u]; e < end; e++) {
-				const v = adjTo[e]
-				if (closedGen[v] === gen) continue
-				let penalty = 0
-				if (hasIn) {
-					let turn = bearing(uLat, uLng, nodesLat[v], nodesLng[v]) - inB
-					while (turn > 180) turn -= 360
-					while (turn < -180) turn += 360
-					if (Math.abs(turn) >= REVERSAL_MIN_DEG) penalty = REVERSAL_PENALTY_CS
-				}
-				const tentative = gu + adjCost[e] + penalty
-				if (seenGen[v] !== gen || tentative < gScore[v]) {
-					gScore[v] = tentative
-					seenGen[v] = gen
-					cameFrom[v] = u
-					cameEdge[v] = e
-					heap.push(v, tentative + heuristic(v, goalLat, goalLng))
+			for (let q = adjHead[u]; q < end; q++) {
+				if (closedGenE[q] === gen) continue
+				// Hard turn restriction: never emit a banned (via, from, to) transition.
+				if (banned !== undefined && banned.has(fromEdge * ftStride + adjEdge[q])) continue
+				let turn = bearing(uLat, uLng, nodesLat[adjTo[q]], nodesLng[adjTo[q]]) - inB
+				while (turn > 180) turn -= 360
+				while (turn < -180) turn += 360
+				const penalty = Math.abs(turn) >= REVERSAL_MIN_DEG ? REVERSAL_PENALTY_CS : 0
+				const tentative = gp + adjCost[q] + penalty
+				if (seenGenE[q] !== gen || tentative < gScoreE[q]) {
+					gScoreE[q] = tentative
+					seenGenE[q] = gen
+					cameStateE[q] = p
+					heap.push(q, tentative + heuristic(adjTo[q], goalLat, goalLng))
 				}
 			}
 		}
 
-		if (closedGen[goal] !== gen) return null // goal never settled → unreachable
+		if (finalState === -1) return null // goal never reached → unreachable
 
-		const nodes = [goal]
-		const edges = []
-		let cur = goal
-		while (cur !== start) {
-			edges.push(adjEdge[cameEdge[cur]])
-			cur = cameFrom[cur]
-			nodes.push(cur)
+		// Walk predecessors back to a seed (cameState -1), then emit node/edge lists.
+		const dedges = []
+		let s = finalState
+		while (s !== -1) {
+			dedges.push(s)
+			s = cameStateE[s]
 		}
-		nodes.reverse()
-		edges.reverse()
+		dedges.reverse()
+		const nodes = [adjFrom[dedges[0]]] // tail of the first hop == start
+		const edges = []
+		for (let i = 0; i < dedges.length; i++) {
+			nodes.push(adjTo[dedges[i]])
+			edges.push(adjEdge[dedges[i]])
+		}
 		return { nodes, edges }
 	}
 
@@ -504,9 +558,13 @@
 	// --- Public API -------------------------------------------------------
 	function initRoutingGraph(graphJson) {
 		if (graphJson === sourceRef) return // idempotent no-op on the same object
-		if (!graphJson || graphJson.format !== EXPECTED_FORMAT || graphJson.formatVersion !== EXPECTED_VERSION) {
+		if (
+			!graphJson ||
+			graphJson.format !== EXPECTED_FORMAT ||
+			SUPPORTED_VERSIONS.indexOf(graphJson.formatVersion) === -1
+		) {
 			throw new Error(
-				'initRoutingGraph: expected ' + EXPECTED_FORMAT + ' v' + EXPECTED_VERSION + ', got ' +
+				'initRoutingGraph: expected ' + EXPECTED_FORMAT + ' v' + SUPPORTED_VERSIONS.join('/') + ', got ' +
 					(graphJson && graphJson.format) + ' v' + (graphJson && graphJson.formatVersion)
 			)
 		}
@@ -522,14 +580,14 @@
 
 		decodeNodes(graphJson)
 		buildAdjacency(graphJson)
+		buildRestrictions(graphJson, graphJson.edges.fromDelta.length)
 		computeLargestScc()
 		buildGrid()
 
-		gScore = new Float64Array(NN)
-		cameFrom = new Int32Array(NN)
-		cameEdge = new Int32Array(NN)
-		seenGen = new Int32Array(NN) // 0 = unseen; gen starts at 1 on first query
-		closedGen = new Int32Array(NN)
+		gScoreE = new Float64Array(DD)
+		cameStateE = new Int32Array(DD)
+		seenGenE = new Int32Array(DD) // 0 = unseen; gen starts at 1 on first query
+		closedGenE = new Int32Array(DD)
 		gen = 0
 
 		sourceRef = graphJson
