@@ -31,17 +31,17 @@ Last Mile lo resuelve dos veces:
 
 ## Características
 
-- 🔍 **Búsqueda unificada en tres fuentes**: tus direcciones, la base oficial de tu zona y OpenStreetMap (Nominatim) — cada resultado con su etiqueta de origen. Insensible a acentos y por palabras sueltas, con resultados agrupados por partida: `cachap 10` muestra *Cachapets* y *El Cachap* con su recuento, y al entrar filtra los números que empiezan por 10.
-- 🗂️ **Navegador de partidas**: con el buscador vacío, explora todas las partidas de tus zonas y baja hasta la casa tocando — pensado para quien no sabe qué teclear.
-- 🏷️ **Casas sin número incluidas**: los puntos S/N del Catastro entran con su identificador real de campo (*Políg. 20 · Parc. 295*), buscable tal y como lo escribiría el vecino.
-- 📍 **Punto exacto, no aproximado**: fija por GPS (con círculo de precisión) o tocando el mapa, y afina arrastrando el pin.
-- ✏️ **Todo es corregible**: si el Catastro tiene un punto mal, edítalo — nombre, notas, posición. Tus correcciones se conservan al actualizar el dataset y viajan en tus copias de seguridad.
-- 📴 **Offline de verdad, mapa incluido**: al descargar tu zona se instala también el mapa vectorial de la comarca (PMTiles): la app, los puntos y el propio mapa funcionan sin cobertura. Con conexión se ve el OSM normal; sin ella, la comarca se dibuja desde tu móvil.
-- 🚗 **Ruta sin conexión**: guiado giro a giro sin red — cálculo A\* en el propio móvil sobre el grafo de caminos de la comarca (OpenStreetMap), con seguimiento GPS anclado, indicaciones en español, recálculo por desvío, tramo final a la casa y pantalla siempre encendida. Complementa (no sustituye) al botón de ruta de Google.
-- 🤝 **Compartir entre repartidores**: pasa tus puntos y correcciones a un compañero con la hoja de compartir nativa; al importar, lo tuyo siempre prevalece en caso de conflicto.
-- 🔒 **Privacidad total**: no hay servidor ni cuentas. Tus direcciones viven únicamente en tu dispositivo (IndexedDB). Exporta/importa un JSON para respaldo o para pasarlas a otro móvil.
-- 📱 **Instalable**: PWA a pantalla completa desde Chrome/Safari — icono propio, arranque instantáneo y actualizaciones automáticas (datos, mapa y grafo avisan con "Actualizar" cuando hay versión nueva).
-- 🗺️ **Escala**: renderizado por canvas con recorte por zoom y encuadre — 30.000 puntos con búsqueda a <1 ms por tecleo.
+- 🔍 **Búsqueda pensada para el campo**: por palabras y sin acentos, sobre tus direcciones, la base oficial y OpenStreetMap, con resultados agrupados por partida y filtro por número.
+- 🗂️ **Navegador de partidas**: explora las partidas de tu zona y llega hasta la casa tocando, sin saber qué teclear.
+- 🏷️ **Casas sin número incluidas**: cada vivienda S/N entra con su identificador de parcela, buscable como se diría sobre el terreno.
+- 📍 **Punto exacto, no aproximado**: fija por GPS o tocando el mapa, y afina arrastrando el pin.
+- ✏️ **Todo es corregible**: si el Catastro tiene un punto mal, edítalo — tus correcciones sobreviven a las actualizaciones y viajan en tus copias.
+- 📴 **Offline de verdad, mapa incluido**: al descargar tu zona se instala también el mapa de la comarca — app, puntos y mapa funcionan sin cobertura.
+- 🚗 **Ruta sin conexión**: guiado giro a giro sin red hasta la puerta, calculado en el propio móvil. Complementa al botón de ruta de Google, no lo sustituye.
+- 🤝 **Compartir entre repartidores**: pasa tus puntos y correcciones a un compañero; al importar, lo tuyo siempre prevalece.
+- 🔒 **Privacidad total**: sin servidor ni cuentas — tus direcciones viven solo en tu dispositivo, con copia de seguridad exportable.
+- 📱 **Instalable**: PWA a pantalla completa, arranque instantáneo y aviso de "Actualizar" cuando hay datos nuevos.
+- 🗺️ **Escala**: decenas de miles de puntos con mapa fluido y búsqueda instantánea.
 
 ## Poblaciones incluidas
 
