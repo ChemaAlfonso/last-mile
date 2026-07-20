@@ -16,7 +16,9 @@ Last Mile is a client-only PWA (no build step, no bundler, no backend) for deliv
 
 ### Three-tier persistence model
 
-The app juggles three storage layers with distinct semantics — this is the single most important thing to internalize before editing `app.js`:
+The runtime logic is split across plain, globals-sharing script files loaded in order (no modules/bundler): `js/config.js` (CONFIG + top-level constants), `js/db.js` (IndexedDB + settings), `js/map.js` (map, base/vector layers, dataset dots, geolocation), `js/search.js` (geocoding, search/matching, partida browser), `js/towns.js` (town download/update/delete, datos UI, import/export backup), then `app.js` (state + el, save flow, list, sheet/onboarding, init — loaded last, ends with `initShell()`). All share one global scope; index.html loads them after the vendor scripts.
+
+The app juggles three storage layers with distinct semantics — this is the single most important thing to internalize before touching this logic:
 
 1. **IndexedDB `addresses` store** (`state.addresses`) — the driver's own saved points. Full CRUD, always exported on backup.
 2. **IndexedDB `places` store** (`state.places`, keyed by town, indexed by `town`) — official Catastro points bulk-loaded from `data/<town>.json`. Individual records can carry `edited: true` when the driver corrects a name/note/position; edited records are preserved across dataset updates and rides along in the export payload as `placeEdits`.
