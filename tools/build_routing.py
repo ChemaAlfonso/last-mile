@@ -93,6 +93,24 @@ ONEWAY_FORWARD = {'yes', 'true', '1'}
 ONEWAY_REVERSE = {'-1', 'reverse'}
 ONEWAY_NONE = {'no', 'false', '0'}
 
+# ---------- turn restrictions ----------
+
+# restriction=* values that ban a single from->to transition directly.
+RESTRICTION_BAN_TYPES = {
+	'no_left_turn',
+	'no_right_turn',
+	'no_straight_on',
+	'no_u_turn',
+	'no_entry',
+	'no_exit',
+}
+# restriction=only_* values that MANDATE a single from->to transition; every
+# other departure from the same from-edge is banned (expanded at build time).
+RESTRICTION_ONLY_TYPES = {'only_left_turn', 'only_right_turn', 'only_straight_on'}
+# A restriction whose "except" list frees any of these vehicle classes does not
+# apply to a delivery car -> skip it. ("vehicle" would also free a motorcar.)
+EXCEPT_VEHICLES = {'motorcar', 'motor_vehicle', 'vehicle', 'delivery'}
+
 # ---------- geometry ----------
 
 EARTH_R = 6371000.0
@@ -195,6 +213,79 @@ def fetch_tiles(bbox, cache_dir):
 	return ways
 
 
+def fetch_restrictions(bbox, cache_dir):
+	"""Return {relation_id: relation} for every type=restriction relation in bbox.
+
+	Uses the same tiled bbox scheme as the ways, a disjoint cache key space
+	(rel_tile_*) so the existing way tile caches stay valid, and dedups relations
+	that straddle tile boundaries. `out body` gives each relation's member refs
+	and roles (from/via/to) but no geometry -- via-node coordinates are resolved
+	separately and from/to ways are mapped through the edges' way ids.
+	"""
+	os.makedirs(cache_dir, exist_ok=True)
+	grid = tiles(bbox)
+	relations = {}
+	for i, (s, w, n, e) in enumerate(grid):
+		key = f'rel_tile_{s:.4f}_{w:.4f}_{n:.4f}_{e:.4f}.json'
+		path = os.path.join(cache_dir, key)
+		if os.path.exists(path):
+			with open(path) as fh:
+				elements = json.load(fh)
+			sys.stderr.write(f'rel tile {i + 1}/{len(grid)} cached ({len(elements)} elements)\n')
+		else:
+			query = (
+				f'[out:json][timeout:180];'
+				f'relation["type"="restriction"]({s:.5f},{w:.5f},{n:.5f},{e:.5f});'
+				f'out body;'
+			)
+			data = fetch(query)
+			elements = data['elements']
+			with open(path, 'w') as fh:
+				json.dump(elements, fh)
+			sys.stderr.write(f'rel tile {i + 1}/{len(grid)} fetched ({len(elements)} elements)\n')
+			time.sleep(TILE_PAUSE_S)
+		for el in elements:
+			if el['type'] == 'relation':
+				relations[el['id']] = el
+	return relations
+
+
+def fetch_via_nodes(node_ids, cache_dir):
+	"""Return {node_id: (lat, lon)} for the given via-node OSM ids.
+
+	Cheap follow-up node(id:...) batches. Cached under a key derived from the id
+	set so a re-run with the same restrictions hits the network zero times.
+	"""
+	os.makedirs(cache_dir, exist_ok=True)
+	ids = sorted(set(node_ids))
+	coords = {}
+	if not ids:
+		return coords
+	digest = hex(abs(hash(tuple(ids))) & 0xFFFFFFFFFFFF)[2:]
+	key = f'vianodes_{len(ids)}_{digest}.json'
+	path = os.path.join(cache_dir, key)
+	if os.path.exists(path):
+		with open(path) as fh:
+			elements = json.load(fh)
+		sys.stderr.write(f'via nodes cached ({len(elements)} nodes)\n')
+	else:
+		elements = []
+		chunk = 1000
+		for start in range(0, len(ids), chunk):
+			batch = ids[start:start + chunk]
+			query = f'[out:json][timeout:180];node(id:{",".join(str(x) for x in batch)});out body;'
+			data = fetch(query)
+			elements.extend(data['elements'])
+			time.sleep(TILE_PAUSE_S)
+		with open(path, 'w') as fh:
+			json.dump(elements, fh)
+		sys.stderr.write(f'via nodes fetched ({len(elements)} nodes)\n')
+	for el in elements:
+		if el['type'] == 'node':
+			coords[el['id']] = (el['lat'], el['lon'])
+	return coords
+
+
 # ---------- filtering / access resolution ----------
 
 
@@ -282,6 +373,7 @@ def build_graph(ways):
 	edir = []  # 0 = both ways, 1 = a->b only
 	ecls = []
 	ename = []
+	eway = []  # OSM way id the segment came from (for turn-restriction mapping)
 	class_index = {}
 	name_index = {}
 	kept_ways = 0
@@ -302,13 +394,14 @@ def build_graph(ways):
 			name_index[name] = i
 		return i
 
-	def add_edge(a, b, cost, direction, cid, nid):
+	def add_edge(a, b, cost, direction, cid, nid, wid):
 		ea.append(a)
 		eb.append(b)
 		ecost.append(cost)
 		edir.append(direction)
 		ecls.append(cid)
 		ename.append(nid)
+		eway.append(wid)
 
 	for way in ways.values():
 		tags = way.get('tags', {})
@@ -321,6 +414,7 @@ def build_graph(ways):
 			continue
 		cid = cls_id(tags.get('highway'))
 		nid = name_id(tags.get('name') or tags.get('ref') or '')
+		wid = way['id']
 		for k in range(len(geom) - 1):
 			ca = (geom[k]['lat'], geom[k]['lon'])
 			cb = (geom[k + 1]['lat'], geom[k + 1]['lon'])
@@ -333,16 +427,18 @@ def build_graph(ways):
 			if ia == ib:
 				continue
 			if forward and backward:
-				add_edge(ia, ib, cost, 0, cid, nid)  # both ways
+				add_edge(ia, ib, cost, 0, cid, nid, wid)  # both ways
 			elif forward:
-				add_edge(ia, ib, cost, 1, cid, nid)  # ia -> ib only
+				add_edge(ia, ib, cost, 1, cid, nid, wid)  # ia -> ib only
 			else:  # backward only: travel goes ib -> ia, store it as the a->b direction
-				add_edge(ib, ia, cost, 1, cid, nid)
+				add_edge(ib, ia, cost, 1, cid, nid, wid)
 		kept_ways += 1
 
 	graph = {
 		'node_coords': node_coords,
 		'edges': {'a': ea, 'b': eb, 'cost': ecost, 'dir': edir, 'cls': ecls, 'name': ename},
+		'edge_ways': eway,  # parallel to edges: OSM way id per undirected edge (pre-Morton)
+		'node_key_to_compact': used,  # rounded (lat, lon) -> compact node index (for via lookup)
 		'classes': [c for c, _ in sorted(class_index.items(), key=lambda kv: kv[1])],
 		'names': [n for n, _ in sorted(name_index.items(), key=lambda kv: kv[1])],
 	}
@@ -363,13 +459,17 @@ def _morton(x, y):
 	return z
 
 
-def encode_graph(node_coords, edges):
+def encode_graph(node_coords, edges, edge_ways):
 	"""Renumber nodes along a Morton (Z-order) curve and delta-encode everything.
 
 	Spatially-near nodes get near indices, so an edge's two endpoints have close
 	indices -- storing the second relative to the first, and both sorted, makes
 	the integer columns compress an order of magnitude better. Fully lossless at
 	COORD_SCALE precision. See docs/offline-routing.md for the decode.
+
+	Also returns the node renumber map (old compact index -> final Morton index)
+	and the OSM way id of every edge in final column order, so turn restrictions
+	can be mapped onto the final node/edge numbering the file ships.
 	"""
 	mic = [(round(lat * COORD_SCALE), round(lon * COORD_SCALE)) for lat, lon in node_coords]
 	shift = COORD_SCALE * 200  # push lat/lon into positive ints for bit interleave
@@ -405,7 +505,8 @@ def encode_graph(node_coords, edges):
 	}
 	# directed endpoint lists for verification / SCC (a->b always; b->a when dir==0)
 	directed = (sa, sb, [direction[i] for i in perm])
-	return enc_nodes, enc_edges, directed
+	way_of_edge = [edge_ways[i] for i in perm]  # final column order
+	return enc_nodes, enc_edges, directed, new_index, way_of_edge
 
 
 # ---------- strongly connected components (iterative Kosaraju) ----------
@@ -508,18 +609,177 @@ def _self_check(node_coords, edges, enc_nodes, enc_edges):
 		raise SystemExit('self-check FAILED: encoded edges do not round-trip')
 
 
-def write_output(bbox, graph, stats):
+# ---------- turn-restriction resolution ----------
+
+
+def _members(rel, role, mtype):
+	return [m['ref'] for m in rel.get('members', []) if m.get('role') == role and m.get('type') == mtype]
+
+
+def resolve_restrictions(relations, via_coords, graph, new_index, final_a, final_b, way_of_edge):
+	"""Map OSM turn-restriction relations onto final (node, from-edge, to-edge) bans.
+
+	Returns ({'via': [...], 'from': [...], 'to': [...]}, stats). Each row k means:
+	the transition arriving at node via[k] along undirected edge from[k] and
+	departing along undirected edge to[k] is forbidden. Rows sorted by
+	(via, from, to), no duplicates. Indices are the final Morton node ids and the
+	final edge columns.
+	"""
+	used = graph['node_key_to_compact']
+
+	# way id -> its final edge columns, and via node -> every incident edge.
+	edges_of_way = {}
+	node_edges = {}
+	for e in range(len(way_of_edge)):
+		edges_of_way.setdefault(way_of_edge[e], []).append(e)
+		node_edges.setdefault(final_a[e], []).append(e)
+		node_edges.setdefault(final_b[e], []).append(e)
+
+	def incident(way_id, node):
+		return [e for e in edges_of_way.get(way_id, ()) if final_a[e] == node or final_b[e] == node]
+
+	def via_node_index(rel):
+		via_nodes = _members(rel, 'via', 'node')
+		if not via_nodes:
+			return None
+		coord = via_coords.get(via_nodes[0])
+		if coord is None:
+			return None
+		compact = used.get((round(coord[0], NODE_KEY_DECIMALS), round(coord[1], NODE_KEY_DECIMALS)))
+		if compact is None:
+			return None
+		return new_index[compact]
+
+	bans = set()
+	st = {
+		'relations': len(relations),
+		'kept_relations': 0,
+		'via_way': 0,
+		'conditional': 0,
+		'excepted': 0,
+		'unknown_type': 0,
+		'no_via_node': 0,
+		'via_off_graph': 0,
+		'edge_off_graph': 0,
+		'interior_via': 0,
+	}
+
+	for rel in relations.values():
+		tags = rel.get('tags', {})
+		rtype = tags.get('restriction')
+		if rtype is None:
+			# Only a conditional variant present -> not an unconditional ban.
+			if any(k.startswith('restriction:conditional') for k in tags):
+				st['conditional'] += 1
+			continue
+		if rtype not in RESTRICTION_BAN_TYPES and rtype not in RESTRICTION_ONLY_TYPES:
+			st['unknown_type'] += 1
+			continue
+		except_val = tags.get('except', '')
+		if any(v.strip() in EXCEPT_VEHICLES for v in except_val.split(';')):
+			st['excepted'] += 1
+			continue
+		if _members(rel, 'via', 'way') and not _members(rel, 'via', 'node'):
+			st['via_way'] += 1
+			continue
+		via = via_node_index(rel)
+		if via is None:
+			if not _members(rel, 'via', 'node'):
+				st['no_via_node'] += 1
+			else:
+				st['via_off_graph'] += 1
+			continue
+
+		froms = _members(rel, 'from', 'way')
+		tos = _members(rel, 'to', 'way')
+		produced = False
+		mapped_all = True
+		for fw in froms:
+			from_edges = incident(fw, via)
+			if not from_edges:
+				mapped_all = False
+				continue
+			if len(from_edges) > 1:
+				st['interior_via'] += 1
+			for tw in tos:
+				to_edges = incident(tw, via)
+				if not to_edges:
+					mapped_all = False
+					continue
+				if len(to_edges) > 1:
+					st['interior_via'] += 1
+				if rtype in RESTRICTION_BAN_TYPES:
+					for fe in from_edges:
+						for te in to_edges:
+							bans.add((via, fe, te))
+							produced = True
+				else:  # only_* -> mandate the to-edge, ban every other departure
+					permitted = set(to_edges)
+					for fe in from_edges:
+						for x in node_edges.get(via, ()):
+							if x in permitted:
+								continue
+							bans.add((via, fe, x))
+							produced = True
+		if produced:
+			st['kept_relations'] += 1
+		elif not mapped_all:
+			st['edge_off_graph'] += 1
+
+	rows = sorted(bans)
+	restrictions = {
+		'via': [r[0] for r in rows],
+		'from': [r[1] for r in rows],
+		'to': [r[2] for r in rows],
+	}
+	st['kept_rows'] = len(rows)
+	return restrictions, st
+
+
+def _self_check_restrictions(restrictions, node_count, edge_count, final_a, final_b):
+	"""Abort if the restriction section is malformed: bounds, incidence, sort, unique."""
+	via, frm, to = restrictions['via'], restrictions['from'], restrictions['to']
+	if not (len(via) == len(frm) == len(to)):
+		raise SystemExit('self-check FAILED: restriction arrays have unequal length')
+	prev = None
+	seen = set()
+	for k in range(len(via)):
+		v, f, t = via[k], frm[k], to[k]
+		if not (0 <= v < node_count):
+			raise SystemExit(f'self-check FAILED: restriction via {v} out of range')
+		if not (0 <= f < edge_count and 0 <= t < edge_count):
+			raise SystemExit(f'self-check FAILED: restriction edge index out of range at row {k}')
+		if v not in (final_a[f], final_b[f]) or v not in (final_a[t], final_b[t]):
+			raise SystemExit(f'self-check FAILED: restriction edge not incident to via at row {k}')
+		row = (v, f, t)
+		if prev is not None and row <= prev:
+			raise SystemExit('self-check FAILED: restrictions not strictly sorted/unique')
+		prev = row
+		seen.add(row)
+	if len(seen) != len(via):
+		raise SystemExit('self-check FAILED: duplicate restriction rows')
+
+
+def write_output(bbox, graph, stats, relations, via_coords):
 	node_coords = graph['node_coords']
 	node_count = len(node_coords)
-	enc_nodes, enc_edges, directed = encode_graph(node_coords, graph['edges'])
+	enc_nodes, enc_edges, directed, new_index, way_of_edge = encode_graph(
+		node_coords, graph['edges'], graph['edge_ways']
+	)
 	edge_count = len(enc_edges['fromDelta'])
 	directed_count = edge_count + directed[2].count(0)  # dir==0 edges are traversable both ways
 	best_scc, _ = largest_scc(node_count, directed)
 	_self_check(node_coords, graph['edges'], enc_nodes, enc_edges)
 
+	final_a, final_b = directed[0], directed[1]  # final node indices per edge column
+	restrictions, rstats = resolve_restrictions(
+		relations, via_coords, graph, new_index, final_a, final_b, way_of_edge
+	)
+	_self_check_restrictions(restrictions, node_count, edge_count, final_a, final_b)
+
 	doc = {
 		'format': 'lastmile-routing-graph',
-		'formatVersion': 1,
+		'formatVersion': 2,
 		'source': 'OpenStreetMap via Overpass API',
 		'attribution': '(c) OpenStreetMap contributors',
 		'license': 'ODbL 1.0',
@@ -542,6 +802,7 @@ def write_output(bbox, graph, stats):
 		'names': graph['names'],
 		'nodes': enc_nodes,
 		'edges': enc_edges,
+		'restrictions': restrictions,
 	}
 	raw = json.dumps(doc, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
 	with open(OUTPUT_PATH, 'wb') as fh:
@@ -560,6 +821,17 @@ def write_output(bbox, graph, stats):
 	print(f'output            {OUTPUT_PATH}')
 	print(f'size raw          {len(raw) / 1e6:.2f} MB')
 	print(f'size gzip -9      {len(gz) / 1e6:.2f} MB')
+	print('== turn restrictions ==')
+	print(f'relations fetched {rstats["relations"]}')
+	print(f'ban rows kept     {rstats["kept_rows"]} (from {rstats["kept_relations"]} relations)')
+	print(f'interior-via segs {rstats["interior_via"]}')
+	print(
+		'skipped           '
+		f'via_way={rstats["via_way"]} conditional={rstats["conditional"]} '
+		f'except={rstats["excepted"]} unknown={rstats["unknown_type"]} '
+		f'no_via_node={rstats["no_via_node"]} via_off_graph={rstats["via_off_graph"]} '
+		f'edge_off_graph={rstats["edge_off_graph"]}'
+	)
 
 
 # ---------- main ----------
@@ -578,8 +850,12 @@ def main(argv):
 	sys.stderr.write(f'comarca bbox {tuple(round(x, 4) for x in bbox)} -> {len(tiles(bbox))} tiles\n')
 	ways = fetch_tiles(bbox, cache_dir)
 	sys.stderr.write(f'fetched {len(ways)} highway ways\n')
+	relations = fetch_restrictions(bbox, cache_dir)
+	sys.stderr.write(f'fetched {len(relations)} restriction relations\n')
+	via_ids = [ref for rel in relations.values() for ref in _members(rel, 'via', 'node')]
+	via_coords = fetch_via_nodes(via_ids, cache_dir)
 	graph, stats = build_graph(ways)
-	write_output(bbox, graph, stats)
+	write_output(bbox, graph, stats, relations, via_coords)
 	return 0
 
 

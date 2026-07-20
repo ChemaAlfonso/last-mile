@@ -48,7 +48,7 @@ JSON (nginx gzips on the fly); see [size](#size--why-plain-json).
 | Field | Type | Meaning |
 |---|---|---|
 | `format` | string | Always `"lastmile-routing-graph"`. Sanity-check on load. |
-| `formatVersion` | int | Schema version, currently `1`. Bump on any breaking change. |
+| `formatVersion` | int | Schema version, currently `2` (v2 added `restrictions`). Bump on any breaking change. |
 | `source` | string | `"OpenStreetMap via Overpass API"`. |
 | `attribution` | string | `"(c) OpenStreetMap contributors"` — must be displayed. |
 | `license` / `licenseNote` | string | ODbL 1.0 + human-readable summary. |
@@ -63,6 +63,7 @@ JSON (nginx gzips on the fly); see [size](#size--why-plain-json).
 | `names` | array | String table of road names (indexed by `edges.name`, `-1` = none). |
 | `nodes` | object | `{dlat, dlng}` — delta-encoded coordinates, see below. |
 | `edges` | object | `{fromDelta, toRel, cost, dir, cls, name}` — see below. |
+| `restrictions` | object | `{via, from, to}` — three parallel arrays of banned turns (v2+), see below. |
 
 ### nodes — delta-encoded, Morton order
 
@@ -154,6 +155,39 @@ unreachable pockets (dead-end service loops, oneway traps, areas clipped at the
 bbox edge). If a snap lands on such a node the route may fail; snapping should
 prefer the main component when a place sits near several roads.
 
+### restrictions — turn bans (v2+)
+
+```json
+"restrictions": { "via": [180441, ...], "from": [307210, ...], "to": [307998, ...] }
+```
+
+Three **parallel integer arrays** of equal length encoding forbidden turns
+derived from OSM `type=restriction` relations. Row `k` means:
+
+> the transition **arriving at node `via[k]`** along undirected edge `from[k]`
+> and **departing along** undirected edge `to[k]` is **FORBIDDEN**.
+
+- `via[k]` is a **final node id** (same numbering as `nodes`); `from[k]` and
+  `to[k]` are **final edge columns** (same numbering as `edges`). Both edges are
+  guaranteed **incident** to `via[k]` (one endpoint of each equals the via node).
+- Because the edges are undirected the ban is stored direction-agnostically; the
+  router applies it whenever a path *reaches* `via[k]` over `from[k]` and would
+  leave over `to[k]`. A **U-turn** ban is the row where `from[k] == to[k]` (or,
+  for split dual carriageways, `from`/`to` are the two edges of a `no_u_turn`).
+- Rows are **sorted by `(via, from, to)`** and **deduplicated**. Empty arrays
+  (`{"via":[],"from":[],"to":[]}`) if a build finds no mappable restrictions.
+
+`only_*` restrictions are **pre-expanded at build time**: `only_left_turn` etc.
+become a set of `no_*`-style rows banning every departure from the from-edge
+*except* the mandated to-edge (including the U-turn back down the from-edge).
+The engine therefore only ever needs to check for a matching `(via, from, to)`
+ban — it never has to interpret an "only" rule at query time.
+
+Enforcement is the JS engine's job (turn expansion in A\*): when relaxing from
+edge `from` into node `via`, skip any neighbour edge `to` for which
+`(via, from, to)` is present. Build a `Set` of packed `via*E*E + from*E + to`
+keys, or a `Map` keyed by `(via, from)` → list of banned `to`, once at load.
+
 ## Build / update procedure
 
 ```
@@ -172,15 +206,23 @@ Standard library only, no pip deps (matches `tools/build_dataset.py`).
    (one try each per round — 504/429 are common on the loaded public
    instances; `private.coffee`, `kumi.systems`, `overpass-api.de` back each
    other up) with retry + polite pacing.
-3. **Cache.** Each raw tile response is cached under `--cache` (default
+3. **Restrictions.** The same tiled bbox is queried for
+   `relation["type"="restriction"]; out body;` (disjoint cache key space
+   `rel_tile_*`, so it never invalidates the way tile caches). Relations that
+   straddle tiles are deduplicated by id. The via **node** ids are then resolved
+   to coordinates with a small `node(id:…); out body;` follow-up (`vianodes_*`
+   cache). See [turn-restriction translation](#turn-restriction-translation).
+4. **Cache.** Each raw tile response is cached under `--cache` (default
    `tools/.overpass-cache/`, keyed by tile bbox). Re-runs read the cache and hit
    the network zero times — delete the cache dir to force a fresh pull. Building
    the full comarca from scratch takes a few minutes; re-encoding from cache is
    ~4 s.
-4. **Filter + build topology** (below), Morton-renumber, delta-encode,
-   round-trip **self-check** (the build aborts if the encoding does not decode
-   back to the same graph), then write `data/graph-comarca.json` and print stats
-   including the largest-SCC coverage.
+5. **Filter + build topology** (below), Morton-renumber, delta-encode, resolve
+   restrictions onto the final numbering, round-trip **self-check** (the build
+   aborts if the node/edge encoding does not decode back to the same graph, or if
+   any restriction row is out of range / not incident / unsorted), then write
+   `data/graph-comarca.json` and print stats including the largest-SCC coverage
+   and the restriction counts.
 
 To refresh from newer OSM data, delete the cache dir and re-run.
 
@@ -192,6 +234,44 @@ meet, so this merges shared nodes exactly as OSM node ids would — while keepin
 the query light (`out geom`). The node-id query (`out body; >; out skel qt;`)
 roughly doubles the payload and **times out on the loaded public endpoints** for
 a comarca-sized box, which is why it is not used.
+
+### Turn-restriction translation
+
+OSM turn restrictions are relations whose members carry roles `from` (way),
+`via` (node or way) and `to` (way). Mapping them onto the compact graph:
+
+1. **Via node → graph node.** The relation's via **node** id is *not* a graph
+   node id (the graph stitches by coordinate, not OSM id). Its coordinate is
+   fetched, rounded to the same 6 decimals used for topology, and looked up in
+   the coordinate → node table. A via that rounds to no graph node (outside the
+   box, or on a way that was filtered out) is **skipped and counted**.
+2. **From/to way → edge column.** Every emitted edge remembers the OSM way id it
+   came from (threaded through the build, then carried through the Morton/perm
+   renumbering). A restriction references the **specific** edge segments incident
+   to the via node — a way splits into many edges, only the one or two touching
+   the via matter. If the from-edge or to-edge is missing (the way was clipped,
+   filtered, dropped, or the via is not one of its vertices) the restriction is
+   **skipped and counted** (`edge_off_graph`).
+3. **Semantics.**
+   - `no_left_turn | no_right_turn | no_straight_on | no_u_turn | no_entry |
+     no_exit` → one direct `(via, from, to)` ban per from×to pair.
+   - `only_left_turn | only_right_turn | only_straight_on` → expanded into a ban
+     for **every** other edge incident to the via departing from the from-edge,
+     except the mandated to-edge (the U-turn back down the from-edge **is**
+     banned; the engine's own U-turn penalty is separate).
+   - **Skipped (counted separately):** via-**way** restrictions (no via node),
+     `restriction:conditional` (time/vehicle-conditional, not unconditional),
+     any relation whose `except` frees `motorcar` / `motor_vehicle` / `vehicle` /
+     `delivery` (does not apply to a delivery car), and unknown `restriction`
+     values.
+   - **Interior-via note:** if a from/to way passes *through* the via (two
+     incident segments rather than ending there), every incident segment is
+     banned — conservative (may over-ban a rare legal approach, never misses the
+     restriction). These are reported as `interior-via segs`.
+
+Because restrictions are resolved against the *final* node/edge numbering, the
+node and edge sections are byte-identical whether or not restrictions are built;
+the section is purely additive.
 
 ### Speed table (edge weights)
 
@@ -207,8 +287,10 @@ routing preference between road classes.
 | tertiary | 60 | | track | 20 |
 | living_street | 20 | | *_link | 40–60 |
 
-No turn costs, no traffic, no surface penalty — out of scope for v1. The JS
-layer may add turn / U-turn penalties on top of edge cost if needed.
+No turn costs, no traffic, no surface penalty in the edge weights. **Turn
+restrictions are encoded** (see [restrictions](#restrictions--turn-bans-v2)) and
+enforced by the engine as hard bans, not weights. The JS layer may still add
+soft turn / U-turn penalties on top of edge cost if needed.
 
 ### Filtering decisions
 
@@ -267,13 +349,20 @@ which trades a simpler routing graph for a more complex snapping/geometry path.
 | Metric | Value |
 |---|---|
 | bbox | `[37.880047, -1.054771, 38.325976, -0.695918]` |
-| kept drivable ways | 38,441 |
-| nodes | 288,270 |
-| undirected edges | 308,319 |
-| directed edges (expanded) | 559,341 |
-| largest SCC | 283,076 nodes (**98.20 %**) |
-| named ways | 6,254 |
-| file size | 7.42 MB raw · **1.92 MB gzip -9** |
+| kept drivable ways | 38,451 |
+| nodes | 288,328 |
+| undirected edges | 308,380 |
+| directed edges (expanded) | 559,464 |
+| largest SCC | 283,135 nodes (**98.20 %**) |
+| named ways | 6,255 |
+| turn-restriction relations fetched | 770 |
+| ban rows kept (v2) | 1,013 (from 761 relations) |
+| restrictions skipped | 8 via-way · 1 unmappable edge (0 conditional / except / interior-via) |
+| file size | 7.44 MB raw · **1.93 MB gzip -9** (restrictions add ~22 KB raw / ~6 KB gzip) |
+
+The node/edge counts moved slightly from the first (v1) build — pure upstream OSM
+drift (+10 ways) between the two fetches, not a code change: the node/edge
+sections are byte-identical whether or not restrictions are built.
 
 Verification (`verify_routing.py`): 30/30 random cross-town place pairs
 connected, A\* avg 19.9 ms / max 54.7 ms (CPython), snap distance avg 36 m /
@@ -298,3 +387,9 @@ SCC, and route to their town core in 3–7 min.
   service roads/driveways that a generic router would refuse. That is correct
   for delivery but means a route may legitimately end on a restricted-access
   stub.
+- **Turn restrictions are sparse but real** — 1,013 ban rows over ~288 k nodes,
+  clustered where the local grid meets the trunk network. Example (Crevillent,
+  local grid × N-340, OSM via node `248033121` at `38.2431251,-0.8121010`): a
+  `no_right_turn` and a `no_u_turn` plus five more restrictions share that one
+  junction. A router that ignores `restrictions` will happily take the forbidden
+  right turn there — enforce the bans, do not treat them as advisory.
