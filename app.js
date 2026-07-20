@@ -633,9 +633,7 @@ function numMatchesPrefix(num, prefix) {
 	return String(num == null ? '' : num).startsWith(prefix)
 }
 
-function datasetGroupMatches(query) {
-	const { nameTokens, numFilter } = parseQuery(query)
-	if (!nameTokens.length && !numFilter) return []
+function collectGroups(nameTokens, numFilter) {
 	const byKey = new Map()
 	const groups = []
 	activeTowns().forEach(town => {
@@ -654,6 +652,18 @@ function datasetGroupMatches(query) {
 			group.places.push(place)
 		}
 	})
+	return groups
+}
+
+function datasetGroupMatches(query) {
+	const { nameTokens, numFilter } = parseQuery(query)
+	if (!nameTokens.length && !numFilter) return []
+	let groups = collectGroups(nameTokens, numFilter)
+	if (!groups.length && numFilter) {
+		// The trailing number was not a house number (nothing matched by prefix). Retry with the
+		// whole query as free text so a cadastral ref like '2251500' or 'callosilla 22' still lands.
+		groups = collectGroups(tokenize(query), '')
+	}
 	// Exact normalized-partida match first, then most matches, then alphabetical
 	const exact = normalize(nameTokens.join(' '))
 	groups.sort(
@@ -839,6 +849,38 @@ function compareNum(a, b) {
 	return na.localeCompare(nb, 'es', { numeric: true })
 }
 
+function isSinNumero(num) {
+	// Anything without a leading digit (S/N and friends) has no house number -- same rule as compareNum
+	return !/^\d/.test(String(num == null ? '' : num))
+}
+
+function parcelCompact(ref) {
+	// Squeeze a cadastral ref into a scannable chip label.
+	//  - rural 'Políg. 20 · Parc. 295' -> '20-295'
+	//  - urban 'Ref. 2251560' -> '2251560' (label dropped, identifier kept intact, letters and all)
+	const s = String(ref == null ? '' : ref).trim()
+	if (!s) return ''
+	if (/pol[ií]g/i.test(s) && /parc/i.test(s)) {
+		const nums = s.match(/\d+/g)
+		if (nums && nums.length >= 2) return nums.slice(0, 2).join('-')
+	}
+	return s.replace(/^\s*ref\.?\s*/i, '').trim() || s
+}
+
+function numChipHtml(place) {
+	const num = String(place.num == null ? '' : place.num)
+	const ref = place.ref ? String(place.ref) : ''
+	if (isSinNumero(num) && ref) {
+		// Parcel pair on the chip, full ref on hover/long-press so the identifier is never lost
+		const label = parcelCompact(ref) || num
+		return (
+			`<button type="button" class="numchip numchip--ref" data-place="${escapeHtml(place.id)}" ` +
+			`title="${escapeHtml(ref)}">${escapeHtml(label)}</button>`
+		)
+	}
+	return `<button type="button" class="numchip" data-place="${escapeHtml(place.id)}">${escapeHtml(num)}</button>`
+}
+
 function partidaRow(group, index) {
 	return (
 		`<button type="button" class="result" data-group="${index}">` +
@@ -874,9 +916,19 @@ function showPartidaBrowser() {
 
 function showPartidaNumbers(group) {
 	const places = group.places.slice().sort((a, b) => compareNum(a.num, b.num))
-	const chips = places
-		.map(p => `<button type="button" class="numchip" data-place="${escapeHtml(p.id)}">${escapeHtml(p.num)}</button>`)
-		.join('')
+	// Numbered chips first; every S/N place then shows its distinguishing cadastral ref (compact)
+	// under a full-width "Sin número" heading so the ref chips read in context
+	const numbered = places.filter(p => !isSinNumero(p.num))
+	const sinNumero = places
+		.filter(p => isSinNumero(p.num))
+		.sort((a, b) => parcelCompact(a.ref).localeCompare(parcelCompact(b.ref), 'es', { numeric: true }))
+	const chipsFor = list => `<div class="results__nums">${list.map(numChipHtml).join('')}</div>`
+	let body = ''
+	if (numbered.length) body += chipsFor(numbered)
+	if (sinNumero.length) {
+		body += '<div class="results__numshead">Sin número</div>'
+		body += chipsFor(sinNumero)
+	}
 	el.results.innerHTML =
 		'<button type="button" class="result" data-back>' +
 		'<div class="result__main">' +
@@ -885,7 +937,7 @@ function showPartidaNumbers(group) {
 		'</div>' +
 		`<span class="badge badge--town">${escapeHtml(townLabel(group.town))}</span>` +
 		'</button>' +
-		`<div class="results__nums">${chips}</div>`
+		body
 	el.results.hidden = false
 	el.results.scrollTop = 0
 	el.results.querySelector('[data-back]').addEventListener('click', () => {
@@ -933,8 +985,13 @@ function findPlaceById(id) {
 }
 
 function placeSubtitle(place) {
-	// Zones carry their own type word (El Boch, Camino del Almajal, Lugar 2...) so no 'Partida' prefix
-	return place.address || `${townLabel(place.town)} · Catastro`
+	// A user-set address wins; otherwise show the cadastral ref (the real-world id for S/N places).
+	// A refless S/N point still reads as "Casa sin número" so it is never a cryptic bare 'S/N'.
+	// Zones carry their own type word, so no 'Partida' prefix.
+	if (place.address) return place.address
+	if (place.ref) return String(place.ref)
+	if (isSinNumero(place.num)) return `Casa sin número · ${townLabel(place.town)}`
+	return `${townLabel(place.town)} · Catastro`
 }
 
 function makeMemPlace(record) {
@@ -950,7 +1007,12 @@ function makeMemPlace(record) {
 		notes: record.notes || '',
 		edited: !!record.edited,
 		updatedAt: record.updatedAt || null,
-		hay: normalize(`${record.name} ${record.partida} ${record.num} ${record.address || ''} ${record.notes || ''}`)
+		ref: record.ref || '',
+		// Include the ref and its compact '20-295' form so a parcel number reaches the place
+		hay: normalize(
+			`${record.name} ${record.partida} ${record.num} ${record.ref || ''} ${parcelCompact(record.ref)} ` +
+			`${record.address || ''} ${record.notes || ''}`
+		)
 	}
 }
 
@@ -964,6 +1026,7 @@ function toDbPlace(place) {
 		lat: place.lat,
 		lng: place.lng
 	}
+	if (place.ref) record.ref = place.ref
 	if (place.address) record.address = place.address
 	if (place.notes) record.notes = place.notes
 	if (place.edited) {
@@ -1173,15 +1236,20 @@ function importTownData(townId, data) {
 	return dbGetAllByTown(townId).then(existing => {
 		const keptIds = new Set(existing.filter(r => r.edited).map(r => r.id))
 		const records = data.places
-			.map(p => ({
-				id: `${townId}/${p.id}`,
-				town: townId,
-				name: p.name,
-				partida: p.partida,
-				num: p.num,
-				lat: p.lat,
-				lng: p.lng
-			}))
+			.map(p => {
+				const r = {
+					id: `${townId}/${p.id}`,
+					town: townId,
+					name: p.name,
+					partida: p.partida,
+					num: p.num,
+					lat: p.lat,
+					lng: p.lng
+				}
+				// Optional cadastral ref (only present on S/N places); omit when absent
+				if (p.ref) r.ref = p.ref
+				return r
+			})
 			.filter(r => !keptIds.has(r.id))
 		return dbDeleteByTown(townId, true)
 			.then(() => dbBulkPut(CONFIG.db.placesStore, records))
@@ -1367,6 +1435,7 @@ function importPlaceEdits(edits) {
 			name: String(e.name || ''),
 			partida: String(e.partida || ''),
 			num: String(e.num || ''),
+			ref: typeof e.ref === 'string' ? e.ref : '',
 			lat: Number(e.lat),
 			lng: Number(e.lng),
 			address: typeof e.address === 'string' ? e.address : '',

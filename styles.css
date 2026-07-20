@@ -285,6 +285,29 @@ button {
 	background: var(--accent-soft);
 }
 
+.numchip--ref {
+	font-size: 15px;
+	font-variant-numeric: tabular-nums;
+	letter-spacing: 0.02em;
+	border-style: dashed;
+}
+
+.results__numshead {
+	margin-top: 6px;
+	padding: 12px 14px 0;
+	font-size: 12px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--muted);
+	border-top: var(--border) solid var(--paper-2);
+}
+
+/* The S/N chip block sits directly under its heading, so trim its own top padding */
+.results__numshead + .results__nums {
+	padding-top: 8px;
+}
+
 .badge {
 	flex: none;
 	margin-top: 2px;
