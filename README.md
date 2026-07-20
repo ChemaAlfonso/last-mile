@@ -62,6 +62,8 @@ python3 tools/build_dataset.py 03059 crevillent Crevillent
 
 El script (solo librería estándar, sin pip) descarga el GML INSPIRE del Catastro, conserva únicamente los tipos de vía rurales (partida, diseminado, camino, vereda, lugar, barrio…), limpia los nombres, deduplica por zona+número, convierte las coordenadas de UTM ETRS89 a WGS84 y actualiza el manifiesto `data/index.json` con control de versiones — las poblaciones ya descargadas por los usuarios muestran "Actualizar" automáticamente.
 
+> Guía operativa completa (filtrado, caso especial PL, tramos S/N y enriquecimiento OVC, calidad de nombres y contrato de estabilidad de ids): [`docs/datasets.md`](docs/datasets.md).
+
 ## Desarrollo
 
 Sin build, sin bundler, sin npm — tres archivos y un directorio de datos:

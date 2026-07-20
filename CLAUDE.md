@@ -52,12 +52,13 @@ Official points render as `L.circleMarker` on a single shared `L.canvas` rendere
 
 ### Dataset builder specifics
 
-`tools/build_dataset.py` is standard-library-only and encodes several municipality-specific quirks:
-- Only **rural thoroughfare types** in `RURAL_TYPES` are kept (PD/DS/LG/CM/VR/CR/BO/HT/PG/PB/CS/AL). Urban types (CL/AV/PZ…) are dropped — regular maps handle those.
-- Addresses with number `S-N` (sin numero) are discarded.
-- Names are cleaned with `clean_zone`: trailing-article normalization (`BOCH, EL` → `El Boch`; `ALMAJAL DEL` → `del Almajal`), Spanish title case with minor-word rules, and fallback prepends (`LG 2` → `Lugar 2`) for ambiguous digit-only zones.
+`tools/build_dataset.py` is standard-library-only and encodes several municipality-specific quirks. Full operating guide (adding a town, name-quality workflow, OVC enrichment): `docs/datasets.md`.
+- Only **rural thoroughfare types** in `RURAL_TYPES` are kept (PD/DS/LG/CM/VR/CR/BO/HT/PG/PB/CS/AL). Urban types (CL/AV/PZ…) are dropped — regular maps handle those. `PL` (polígono) is urban by default with a rural keyword rescue + per-town allow-list (`RURAL_PL_ZONES`); `PG` is unused in Alicante (Catastro uses `PL`) but kept for other provinces.
+- Addresses with number `S-N` (sin numero) are KEPT as places with `num: 'S/N'` and a mandatory `ref` field — the driver-facing identifier, in tiers: rural parcel (`Políg. 20 · Parc. 295`), OVC-sourced designator (`Parcela 34`), or compact cadastral ref as last resort. Each S/N point keeps its own coordinates (never averaged into a zone centroid).
+- Names are cleaned with `clean_zone`: trailing-article normalization (`BOCH, EL` → `El Boch`), GP-fragment stripping (`MOCO EL GP.3` → `El Moco`, merging fragments), verified abbreviation expansion, Spanish title case with minor-word rules, fallback prepends (`LG 2` → `Lugar 2`), and per-town overrides in `CANONICAL_ZONE_NAMES`.
+- **Id-stability contract (critical)**: place ids come from a FROZEN legacy cleaner (`_legacy_clean_zone`), never from the display name — driver edits are keyed by id, so id churn orphans them. Never change the legacy cleaner, never generate sequential S/N ids (they anchor on the cadastral parcel ref). Before shipping a rebuild, diff old vs new per town: 0 lost ids, 0 moved coords, only expected additions/renames.
 - Coordinates come in EPSG:25830 (UTM 30N / ETRS89) and are inverse-projected to WGS84 with an inlined Snyder series — do NOT swap this for a library dep. The SRS is asserted per-address; a mismatch aborts the build.
-- Dedup key is `(zone, number)` with coordinate averaging as the centroid.
+- Dedup key is `(zone, number)` with coordinate averaging as the centroid; zones in `DISTANCE_MERGE_ZONES` only merge collisions closer than 150 m (same number reused for distant houses stays two places).
 - `resolve_version` keeps the previous version if the `places` array is byte-identical, otherwise bumps it — without this, regenerated datasets stay at v1 forever and the app's "Actualizar" button never appears for already-downloaded towns.
 - Catastro's TLS chain fails verification on some machines; the script uses an unverified SSL context on purpose (payload is public open data).
 
