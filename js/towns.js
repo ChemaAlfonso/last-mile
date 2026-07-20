@@ -166,8 +166,10 @@ function downloadTown(townId, btn) {
 			toast(`${data.name}: ${formatMiles(data.count)} puntos cargados`, 'ok')
 			renderDatos()
 			renderDatasetDots()
-			// Town first (instant value), then pull the offline basemap silently. Never blocks the town.
+			// Town first (instant value), then pull the offline basemap + routing graph silently.
+			// Neither blocks the town data, which is the core value.
 			ensureBasemap()
+			ensureGraph()
 		})
 		.catch(err => {
 			console.error(err)
@@ -219,6 +221,7 @@ function updateTown(townId, btn) {
 			renderDatos()
 			renderDatasetDots()
 			ensureBasemap()
+			ensureGraph()
 		})
 		.catch(err => {
 			console.error(err)
@@ -232,8 +235,8 @@ let updatingAll = false
 function updateAllTowns(btn, onDone) {
 	if (updatingAll) return
 	const ids = outdatedTowns()
-	// Nothing to do only when neither town data nor the basemap needs a refresh
-	if (!ids.length && !basemapNeeded()) {
+	// Nothing to do only when neither town data, the basemap, nor the routing graph needs a refresh
+	if (!ids.length && !basemapNeeded() && !graphNeeded()) {
 		if (onDone) onDone()
 		return
 	}
@@ -243,11 +246,15 @@ function updateAllTowns(btn, onDone) {
 	const done = []
 	const failed = []
 	const finishTowns = () => {
-		// After town data, fold in the basemap refresh (missing or outdated) as part of the same action
+		// After town data, fold in the offline extras (basemap + routing graph) that are missing or
+		// outdated, as part of the same action -- neither has a per-row button of its own
 		const complete = () => finishUpdateAll(done, failed, onDone)
-		if (basemapNeeded()) {
+		const extras = []
+		if (basemapNeeded()) extras.push(ensureBasemap)
+		if (graphNeeded()) extras.push(ensureGraph)
+		if (extras.length) {
 			if (btn) btn.textContent = 'Descargando mapa…'
-			return ensureBasemap().then(complete, complete)
+			return Promise.all(extras.map(fn => fn())).then(complete, complete)
 		}
 		return complete()
 	}
@@ -312,9 +319,10 @@ function deleteTown(townId) {
 			delete state.settings.towns[townId]
 			saveSettings()
 			state.places.delete(townId)
-			// Deleting the last town frees the shared offline basemap too (no town left to use it)
-			if (Object.keys(state.settings.towns).length === 0 && state.basemapInstalled) {
-				deleteBasemapBlob()
+			// Deleting the last town frees the shared offline extras too (no town left to use them)
+			if (Object.keys(state.settings.towns).length === 0) {
+				if (state.basemapInstalled) deleteBasemapBlob()
+				if (state.graphInstalled) deleteGraphBlob()
 			}
 			renderDatasetDots()
 			renderDatos()
@@ -419,9 +427,9 @@ function renderDatos() {
 		const stored = state.settings.towns[id]
 		towns.push({ id, name: stored.name, version: stored.version, count: stored.count })
 	})
-	// One-tap update: shown when several zones are outdated, or when the offline basemap still
-	// needs fetching/refreshing (which has no per-row button of its own)
-	if (outdatedTowns().length > 1 || basemapNeeded()) {
+	// One-tap update: shown when several zones are outdated, or when the offline basemap or routing
+	// graph still needs fetching/refreshing (neither has a per-row button of its own)
+	if (outdatedTowns().length > 1 || basemapNeeded() || graphNeeded()) {
 		rows.push(
 			'<div class="datos-row datos-row--action">' +
 			'<button type="button" class="btn btn--primary btn--block" data-act="towns-update-all">Actualizar todo</button>' +

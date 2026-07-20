@@ -7,7 +7,7 @@
 
 'use strict'
 
-const CACHE_VERSION = 'last-mile-v6'
+const CACHE_VERSION = 'last-mile-v7'
 
 // The app shell. Datasets under data/ (incl. the offline basemap .pmtiles) are NOT precached:
 // they live in IndexedDB and the app owns their offline path. Vendored libraries (Leaflet, the
@@ -21,6 +21,7 @@ const SHELL = [
 	'js/map.js',
 	'js/search.js',
 	'js/towns.js',
+	'js/routing.js',
 	'app.js',
 	'manifest.json',
 	'vendor/leaflet/leaflet.js',

@@ -20,6 +20,10 @@ function openDb() {
 			if (!db.objectStoreNames.contains(CONFIG.db.basemapStore)) {
 				db.createObjectStore(CONFIG.db.basemapStore, { keyPath: 'id' })
 			}
+			// v3 -> v4: holds the single offline routing graph (raw JSON text) + its metadata
+			if (!db.objectStoreNames.contains(CONFIG.db.routingStore)) {
+				db.createObjectStore(CONFIG.db.routingStore, { keyPath: 'id' })
+			}
 		}
 		req.onsuccess = () => {
 			dbInstance = req.result
@@ -144,10 +148,11 @@ function saveSettings() {
 }
 
 function normalizeSettings(parsed) {
-	const settings = { ownVisible: true, onboarded: false, towns: {} }
+	const settings = { ownVisible: true, onboarded: false, navWarned: false, towns: {} }
 	if (parsed && typeof parsed === 'object') {
 		if (parsed.ownVisible === false) settings.ownVisible = false
 		if (parsed.onboarded === true) settings.onboarded = true
+		if (parsed.navWarned === true) settings.navWarned = true
 		if (parsed.towns && typeof parsed.towns === 'object') {
 			Object.keys(parsed.towns).forEach(id => {
 				const t = parsed.towns[id]

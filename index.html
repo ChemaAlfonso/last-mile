@@ -793,6 +793,154 @@
 			</div>
 		</div>
 
+		<!-- First-use disclaimer for offline routing: sets expectations (support tool, not Google) -->
+		<div
+			id="navDisclaimer"
+			class="onboard"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="navDisclaimerTitle"
+			hidden
+		>
+			<div class="onboard__card">
+				<div
+					class="onboard__stripe"
+					aria-hidden="true"
+				></div>
+				<div class="onboard__body">
+					<h2
+						id="navDisclaimerTitle"
+						class="onboard__title"
+					>
+						Ruta de apoyo
+					</h2>
+					<p class="onboard__text">
+						Esta ruta funciona sin cobertura, pero es una ayuda de orientación: no conoce el tráfico,
+						los cortes ni todas las señales, y nunca será tan precisa como Google Maps. Sigue siempre
+						la señalización real de la vía.
+					</p>
+					<label class="onboard__check">
+						<input
+							id="navDisclaimerSkip"
+							type="checkbox"
+						/>
+						No volver a mostrar
+					</label>
+					<div class="onboard__actions">
+						<button
+							id="navDisclaimerCancel"
+							class="btn btn--ghost"
+							type="button"
+						>
+							Cancelar
+						</button>
+						<button
+							id="navDisclaimerOk"
+							class="btn btn--primary"
+							type="button"
+						>
+							Entendido
+						</button>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- No-offline-route explainer (a toast reads as "broken"; this modal says why and what to do) -->
+		<div
+			id="navUnavailable"
+			class="onboard"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="navUnavailableTitle"
+			hidden
+		>
+			<div class="onboard__card">
+				<div
+					class="onboard__stripe"
+					aria-hidden="true"
+				></div>
+				<div class="onboard__body">
+					<h2
+						id="navUnavailableTitle"
+						class="onboard__title"
+					>
+						Sin ruta disponible
+					</h2>
+					<p class="onboard__text">
+						La ruta sin conexión solo funciona dentro de tu comarca de reparto, y necesita que estés a
+						menos de 500 metros de un camino conocido. Acércate a tu zona e inténtalo de nuevo, o usa el
+						botón Ruta para navegar con Google Maps.
+					</p>
+					<div class="onboard__actions">
+						<button
+							id="navUnavailableOk"
+							class="btn btn--primary"
+							type="button"
+						>
+							Aceptar
+						</button>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Offline navigation guidance banner (shown only while a "Ruta sin conexión" is active) -->
+		<div
+			id="navBanner"
+			class="nav"
+			role="status"
+			aria-live="polite"
+			hidden
+		>
+			<div class="nav__main">
+				<span
+					id="navArrow"
+					class="nav__arrow"
+					aria-hidden="true"
+					>↑</span
+				>
+				<div class="nav__instr">
+					<div
+						id="navManeuver"
+						class="nav__maneuver"
+					></div>
+					<div
+						id="navRoad"
+						class="nav__road"
+						hidden
+					></div>
+				</div>
+				<div
+					id="navDist"
+					class="nav__dist"
+				></div>
+			</div>
+			<div class="nav__foot">
+				<div
+					id="navRemaining"
+					class="nav__remaining"
+				></div>
+				<div class="nav__actions">
+					<button
+						id="navCenter"
+						class="btn btn--sm btn--primary"
+						type="button"
+						hidden
+					>
+						Centrar
+					</button>
+					<button
+						id="navExit"
+						class="btn btn--sm nav__exit"
+						type="button"
+					>
+						Salir
+					</button>
+				</div>
+			</div>
+		</div>
+
 		<!-- Toasts -->
 		<div
 			id="toasts"
@@ -810,6 +958,9 @@
 		<script src="js/map.js"></script>
 		<script src="js/search.js"></script>
 		<script src="js/towns.js"></script>
+		<!-- Offline routing engine (A*/snapping). Optional: may 404 until it ships; the app boots fine
+		     without it and the "Ruta sin conexión" button stays hidden until the graph is installed. -->
+		<script src="js/routing.js"></script>
 		<script src="app.js"></script>
 	</body>
 </html>

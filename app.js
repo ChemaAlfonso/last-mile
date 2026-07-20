@@ -13,7 +13,7 @@ const state = {
 	remoteMarker: null,
 	searchController: null,
 	confirmTimers: new Map(),
-	settings: { ownVisible: true, onboarded: false, towns: {} },
+	settings: { ownVisible: true, onboarded: false, navWarned: false, towns: {} },
 	manifest: { towns: [] },
 	places: new Map(),
 	placeMarkers: new Map(),
@@ -31,7 +31,18 @@ const state = {
 	basemapMeta: null,
 	basemapBusy: false,
 	basemapProgress: 0,
-	basemapFailed: false
+	basemapFailed: false,
+	// Offline routing graph (rides along with town downloads, invisible to the driver like the basemap)
+	graphInstalled: false,
+	graphText: null,
+	graphMeta: null,
+	graphBusy: false,
+	graphProgress: 0,
+	graphFailed: false,
+	// Active offline navigation session, or null when not navigating
+	navigation: null,
+	// Destination stashed while the first-use routing disclaimer waits for Entendido
+	pendingNavDest: null
 }
 
 /* ---------- dom ---------- */
@@ -76,7 +87,21 @@ const el = {
 	onboardDismiss: document.getElementById('onboardDismiss'),
 	updatePrompt: document.getElementById('updatePrompt'),
 	updatePromptGo: document.getElementById('updatePromptGo'),
-	updatePromptDismiss: document.getElementById('updatePromptDismiss')
+	updatePromptDismiss: document.getElementById('updatePromptDismiss'),
+	navBanner: document.getElementById('navBanner'),
+	navArrow: document.getElementById('navArrow'),
+	navManeuver: document.getElementById('navManeuver'),
+	navRoad: document.getElementById('navRoad'),
+	navDist: document.getElementById('navDist'),
+	navRemaining: document.getElementById('navRemaining'),
+	navExit: document.getElementById('navExit'),
+	navCenter: document.getElementById('navCenter'),
+	navUnavailable: document.getElementById('navUnavailable'),
+	navUnavailableOk: document.getElementById('navUnavailableOk'),
+	navDisclaimer: document.getElementById('navDisclaimer'),
+	navDisclaimerSkip: document.getElementById('navDisclaimerSkip'),
+	navDisclaimerCancel: document.getElementById('navDisclaimerCancel'),
+	navDisclaimerOk: document.getElementById('navDisclaimerOk')
 }
 
 let map = null
@@ -403,6 +428,7 @@ function cardHtml(record) {
 		'<div class="card__actions">' +
 		'<button type="button" class="btn btn--sm" data-act="view">Ver</button>' +
 		'<button type="button" class="btn btn--sm" data-act="route">Ruta</button>' +
+		offlineRouteBtnHtml() +
 		'<button type="button" class="btn btn--sm" data-act="share">Compartir</button>' +
 		'<button type="button" class="btn btn--sm" data-act="edit">Editar</button>' +
 		'<button type="button" class="btn btn--sm btn--danger" data-act="delete">Borrar</button>' +
@@ -419,6 +445,7 @@ function bindCard(card) {
 		btn.addEventListener('click', () => {
 			if (act === 'view') focusAddress(id)
 			else if (act === 'route') openRoute(record)
+			else if (act === 'offlineRoute') startNavigation(record)
 			else if (act === 'share') shareAddress(record)
 			else if (act === 'edit') startEdit(id)
 			else if (act === 'delete') confirmDelete(btn, id)
@@ -492,8 +519,8 @@ function maybeShowUpdatePrompt() {
 	if (updatePromptShown || !el.updatePrompt) return
 	if (!el.onboard.hidden) return
 	if (Object.keys(state.settings.towns).length === 0) return
-	// Outdated town data OR a missing/outdated offline basemap both surface as the normal update state
-	if (!outdatedTowns().length && !basemapNeeded()) return
+	// Outdated town data OR a missing/outdated offline basemap OR routing graph all surface here
+	if (!outdatedTowns().length && !basemapNeeded() && !graphNeeded()) return
 	updatePromptShown = true
 	el.updatePrompt.hidden = false
 }
@@ -565,6 +592,35 @@ function bindEvents() {
 
 	if (el.updatePromptGo) el.updatePromptGo.addEventListener('click', runUpdatePromptUpdate)
 	if (el.updatePromptDismiss) el.updatePromptDismiss.addEventListener('click', dismissUpdatePrompt)
+
+	if (el.navExit) el.navExit.addEventListener('click', stopNavigation)
+	if (el.navCenter) el.navCenter.addEventListener('click', recenterNavigation)
+	if (el.navUnavailableOk)
+		el.navUnavailableOk.addEventListener('click', () => {
+			el.navUnavailable.hidden = true
+		})
+	if (el.navDisclaimerOk)
+		el.navDisclaimerOk.addEventListener('click', () => {
+			if (el.navDisclaimerSkip && el.navDisclaimerSkip.checked) {
+				state.settings.navWarned = true
+				saveSettings()
+			}
+			el.navDisclaimer.hidden = true
+			const dest = state.pendingNavDest
+			state.pendingNavDest = null
+			if (dest) proceedNavigation(dest)
+		})
+	if (el.navDisclaimerCancel)
+		el.navDisclaimerCancel.addEventListener('click', () => {
+			el.navDisclaimer.hidden = true
+			state.pendingNavDest = null
+		})
+	// The screen wake lock is auto-released when the tab is hidden; re-acquire it when navigating again
+	document.addEventListener('visibilitychange', () => {
+		if (document.visibilityState === 'visible' && state.navigation && !state.navigation.wakeLock) {
+			requestWakeLock()
+		}
+	})
 }
 
 let appStarted = false
@@ -645,6 +701,9 @@ function initApp() {
 	// Read the stored basemap (if any) and switch to the offline vector layer -- read-only,
 	// never a hidden download. A missing basemap surfaces through the normal update UI instead.
 	loadBasemapState()
+	// Read the stored routing graph metadata (if any) -- read-only, parsed lazily on first navigation.
+	// A missing graph surfaces through the same update UI as the basemap.
+	loadGraphState()
 	// Wait for the splash transition to finish so the modal never lands on top of it
 	setTimeout(maybeShowOnboarding, 450)
 	dbGetAll(CONFIG.db.store)
