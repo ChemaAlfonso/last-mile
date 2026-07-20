@@ -63,26 +63,26 @@ python3 tools/build_dataset.py <código_municipio> <id> "<Nombre>"
 python3 tools/build_dataset.py 03059 crevillent Crevillent
 ```
 
-El script (solo librería estándar, sin pip) descarga el GML INSPIRE del Catastro, conserva únicamente los tipos de vía rurales (partida, diseminado, camino, vereda, lugar, barrio…), limpia los nombres, deduplica por zona+número, convierte las coordenadas de UTM ETRS89 a WGS84 y actualiza el manifiesto `data/index.json` con control de versiones — las poblaciones ya descargadas por los usuarios muestran "Actualizar" automáticamente.
-
-> Guía operativa completa (filtrado, caso especial PL, tramos S/N y enriquecimiento OVC, calidad de nombres y contrato de estabilidad de ids): [`docs/datasets.md`](docs/datasets.md).
+El script descarga los datos abiertos del Catastro para ese municipio, los limpia y actualiza el catálogo — las poblaciones ya descargadas por los usuarios muestran "Actualizar" automáticamente. Guía completa en [`docs/datasets.md`](docs/datasets.md).
 
 ## Desarrollo
 
 Sin build, sin bundler, sin npm — ficheros estáticos y un directorio de datos:
 
 ```bash
-python3 -m http.server 8000
+python3 tools/dev_server.py 8000
 # → http://localhost:8000
 ```
 
 > Sirve siempre por HTTP: abrir `index.html` como archivo rompe el service worker, IndexedDB y la geolocalización.
 
-> Mapa offline (base vectorial PMTiles para navegar sin cobertura): cómo se genera con `tools/build_basemap.py`, cómo servirlo en nginx (nunca comprimir el `.pmtiles`) y la atribución ODbL/OpenStreetMap obligatoria en [`docs/offline-map.md`](docs/offline-map.md). En local usa `python3 tools/dev_server.py 8000` (soporta peticiones Range, que `http.server` no).
+Documentación:
 
-> Grafo de rutas (para la "Ruta sin conexión"): se construye desde OpenStreetMap con `tools/build_routing.py`; el formato compacto, el A\*, las decisiones de filtrado y la licencia ODbL están en [`docs/offline-routing.md`](docs/offline-routing.md). La receta completa para crecer (añadir poblaciones y regenerar mapa + grafo) está en [`docs/growth.md`](docs/growth.md).
-
-El código son ficheros planos que comparten ámbito global, cargados en orden (`js/config.js`, `js/db.js`, `js/map.js`, `js/search.js`, `js/towns.js`, `js/routing.js`, `app.js`). La arquitectura se apoya en tres capas de persistencia: `addresses` (IndexedDB — tus puntos), `places` (IndexedDB — puntos oficiales por población, con ediciones marcadas) y `localStorage` (ajustes y visibilidad). El detalle completo está en [CLAUDE.md](CLAUDE.md).
+- [`docs/datasets.md`](docs/datasets.md) — cómo se construyen los datasets del Catastro
+- [`docs/offline-map.md`](docs/offline-map.md) — mapa offline (generación, servido y atribución)
+- [`docs/offline-routing.md`](docs/offline-routing.md) — grafo y motor de la "Ruta sin conexión"
+- [`docs/growth.md`](docs/growth.md) — añadir poblaciones y zonas nuevas
+- [`CLAUDE.md`](CLAUDE.md) — arquitectura y convenciones del código
 
 ## Créditos y atribuciones
 
