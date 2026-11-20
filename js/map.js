@@ -488,6 +488,7 @@ function clearRemoteMarker() {
 
 function setTempMarker(lat, lng) {
 	clearTempMarker()
+	state.prefillToken++
 	state.tempCoords = { lat, lng }
 	state.tempMarker = L.marker([lat, lng], { icon: tempIcon(), draggable: true }).addTo(map)
 	state.tempMarker.on('drag', ev => {

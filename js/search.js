@@ -142,14 +142,21 @@ function datasetGroupMatches(query) {
 	return groups.slice(0, CONFIG.dataset.resultLimit)
 }
 
-function onSearchInput() {
-	const query = el.searchInput.value.trim()
-	el.searchClear.hidden = query.length === 0
-	if (searchTimer) clearTimeout(searchTimer)
+function cancelPendingSearch() {
+	if (searchTimer) {
+		clearTimeout(searchTimer)
+		searchTimer = null
+	}
 	if (state.searchController) {
 		state.searchController.abort()
 		state.searchController = null
 	}
+}
+
+function onSearchInput() {
+	const query = el.searchInput.value.trim()
+	el.searchClear.hidden = query.length === 0
+	cancelPendingSearch()
 	if (!query) {
 		showPartidaBrowser()
 		return
@@ -275,6 +282,8 @@ function showRemoteMarker(lat, lng, name, sub) {
 }
 
 function hideResults() {
+	// A remote search still in flight would re-render and reopen the panel the driver just closed
+	cancelPendingSearch()
 	el.results.hidden = true
 	el.results.innerHTML = ''
 }

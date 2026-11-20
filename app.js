@@ -9,6 +9,8 @@ const state = {
 	editingId: null,
 	editingPlaceId: null,
 	placementMode: false,
+	saving: false,
+	prefillToken: 0,
 	locateLayers: null,
 	remoteMarker: null,
 	searchController: null,
@@ -216,7 +218,10 @@ function enterPlacementFromRemote(lat, lng, name, sub) {
 
 function prefillAddress(lat, lng) {
 	if (el.fAddress.value.trim()) return
+	const token = ++state.prefillToken
 	reverseGeocode(lat, lng).then(text => {
+		// A late answer belongs to an earlier tap or to a form already closed
+		if (token !== state.prefillToken) return
 		if (text && !el.fAddress.value.trim()) el.fAddress.value = text
 	})
 }
@@ -247,6 +252,7 @@ function showSettingsView() {
 }
 
 function resetForm() {
+	state.prefillToken++
 	el.fName.value = ''
 	el.fAddress.value = ''
 	el.fNotes.value = ''
@@ -255,6 +261,7 @@ function resetForm() {
 
 function onFormSubmit(event) {
 	event.preventDefault()
+	if (state.saving) return
 	const name = el.fName.value.trim()
 	if (!name) {
 		toast('El nombre es obligatorio', 'warn')
@@ -281,6 +288,7 @@ function onFormSubmit(event) {
 		createdAt: existing ? existing.createdAt : now,
 		updatedAt: now
 	}
+	state.saving = true
 	dbPut(CONFIG.db.store, record)
 		.then(() => {
 			upsertAddress(record)
@@ -294,6 +302,9 @@ function onFormSubmit(event) {
 		.catch(err => {
 			console.error(err)
 			toast('No se pudo guardar', 'error')
+		})
+		.then(() => {
+			state.saving = false
 		})
 }
 
@@ -319,7 +330,8 @@ function savePlaceEdit(name) {
 	place.lng = state.tempCoords.lng
 	place.edited = true
 	place.updatedAt = new Date().toISOString()
-	place.hay = normalize(`${place.name} ${place.partida} ${place.num} ${place.address} ${place.notes}`)
+	place.hay = placeHaystack(place)
+	state.saving = true
 	dbPut(CONFIG.db.placesStore, toDbPlace(place))
 		.then(() => {
 			toast('Punto actualizado', 'ok')
@@ -330,6 +342,9 @@ function savePlaceEdit(name) {
 		.catch(err => {
 			console.error(err)
 			toast('No se pudo guardar', 'error')
+		})
+		.then(() => {
+			state.saving = false
 		})
 }
 
@@ -347,6 +362,7 @@ function startEdit(id) {
 	setTempMarker(record.lat, record.lng)
 	showFormView()
 	expandSheet()
+	refreshDatasetInteractivity()
 }
 
 /* ---------- list ---------- */

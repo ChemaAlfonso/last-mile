@@ -30,6 +30,14 @@ function placeSubtitle(place) {
 	return `${townLabel(place.town)} · Catastro`
 }
 
+function placeHaystack(record) {
+	// Include the ref and its compact '20-295' form so a parcel number reaches the place
+	return normalize(
+		`${record.name} ${record.partida} ${record.num} ${record.ref || ''} ${parcelCompact(record.ref)} ` +
+		`${record.address || ''} ${record.notes || ''}`
+	)
+}
+
 function makeMemPlace(record) {
 	return {
 		id: record.id,
@@ -44,11 +52,7 @@ function makeMemPlace(record) {
 		edited: !!record.edited,
 		updatedAt: record.updatedAt || null,
 		ref: record.ref || '',
-		// Include the ref and its compact '20-295' form so a parcel number reaches the place
-		hay: normalize(
-			`${record.name} ${record.partida} ${record.num} ${record.ref || ''} ${parcelCompact(record.ref)} ` +
-			`${record.address || ''} ${record.notes || ''}`
-		)
+		hay: placeHaystack(record)
 	}
 }
 
@@ -645,7 +649,7 @@ function mergeImported(list) {
 		})
 	})
 	if (toAdd.length === 0) return Promise.resolve({ added: 0, conflicts, invalid })
-	return Promise.all(toAdd.map(record => dbPut(CONFIG.db.store, record))).then(() => {
+	return dbBulkPut(CONFIG.db.store, toAdd).then(() => {
 		toAdd.forEach(upsertAddress)
 		rebuildOwnHaystacks()
 		renderList()
