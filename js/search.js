@@ -76,24 +76,48 @@ function rebuildOwnHaystacks() {
 	})
 }
 
-function localMatches(query) {
-	const tokens = tokenize(query)
-	if (!tokens.length) return []
-	return state.addresses
-		.filter(a => haystackMatches(state.ownHay.get(a.id) || '', tokens))
-		.slice(0, CONFIG.search.localLimit)
+// Words a delivery label writes around the zone name that the dataset name does not carry
+const LABEL_TYPE_WORDS = new Set([
+	'partida', 'pda', 'ptda', 'pd', 'camino', 'cno', 'cmno', 'cm', 'cº', 'carretera', 'ctra', 'crta', 'cr',
+	'vereda', 'vda', 'vd', 'diseminado', 'diseminados', 'dis', 'ds', 'lugar', 'lg', 'barrio', 'bo',
+	'poligono', 'pol', 'paraje'
+])
+const LABEL_NUMBER_WORDS = new Set(['numero', 'num', 'nro', 'nº', 'n°', 'no', 'n'])
+const LABEL_CONNECTORS = new Set(['de', 'del', 'la', 'el', 'los', 'las', 'y'])
+
+function labelTokens(tokens) {
+	const pieces = []
+	tokens.forEach(token => token.split(/[.,;:()]+/).forEach(piece => pieces.push(piece)))
+	return pieces.map(piece => piece.replace(/^(?:nº|n°|num|nro|no|n)(?=\d)/, '')).filter(Boolean)
 }
 
-function parseQuery(query) {
-	// Split a trailing pure-number token off as a num filter: 'cachap 10' -> name 'cachap', num '10'.
-	// The num is matched by prefix on the place number (10 -> 10, 100, 1000), so non-numeric
-	// numbers such as 'S/N' never match a numeric filter.
-	const tokens = tokenize(query)
-	let numFilter = ''
-	if (tokens.length && /^\d+$/.test(tokens[tokens.length - 1])) {
-		numFilter = tokens.pop()
-	}
-	return { nameTokens: tokens, numFilter }
+function relaxedTokenSets(tokens) {
+	// Least aggressive first: a zone can itself be named with a type word ('Diseminados') or an article ('El Moco')
+	const typed = labelTokens(tokens).filter(token => !LABEL_NUMBER_WORDS.has(token))
+	const withoutLeadingType = LABEL_TYPE_WORDS.has(typed[0]) ? typed.slice(1) : typed
+	const withoutConnectors = list => list.filter(token => !LABEL_CONNECTORS.has(token))
+	const candidates = [
+		typed,
+		withoutLeadingType,
+		withoutConnectors(typed),
+		withoutConnectors(withoutLeadingType),
+		withoutConnectors(typed).filter(token => !LABEL_TYPE_WORDS.has(token))
+	]
+	const seen = new Set([tokens.join(' ')])
+	return candidates.filter(set => {
+		const key = set.join(' ')
+		// Only numbers and connectors left would match half the catalogue by accident ('de' is in 'Dehesa')
+		const hasName = set.some(token => !/^\d+$/.test(token) && !LABEL_CONNECTORS.has(token))
+		if (seen.has(key) || !hasName) return false
+		seen.add(key)
+		return true
+	})
+}
+
+function isOnlyLabelNoise(query) {
+	const tokens = labelTokens(tokenize(query))
+	const isNoise = token => LABEL_TYPE_WORDS.has(token) || LABEL_NUMBER_WORDS.has(token) || LABEL_CONNECTORS.has(token)
+	return tokens.length > 0 && tokens.every(isNoise)
 }
 
 function numMatchesPrefix(num, prefix) {
@@ -122,24 +146,50 @@ function collectGroups(nameTokens, numFilter) {
 	return groups
 }
 
-function datasetGroupMatches(query) {
-	const { nameTokens, numFilter } = parseQuery(query)
-	if (!nameTokens.length && !numFilter) return []
+function groupsForTokens(tokens) {
+	// Split a trailing pure-number token off as a num filter: 'cachap 10' -> name 'cachap', num '10'.
+	// The num is matched by prefix on the place number (10 -> 10, 100, 1000), so non-numeric
+	// numbers such as 'S/N' never match a numeric filter.
+	const nameTokens = tokens.slice()
+	let numFilter = ''
+	if (nameTokens.length && /^\d+$/.test(nameTokens[nameTokens.length - 1])) {
+		numFilter = nameTokens.pop()
+	}
+	if (!nameTokens.length && !numFilter) return { groups: [], nameTokens }
 	let groups = collectGroups(nameTokens, numFilter)
 	if (!groups.length && numFilter) {
 		// The trailing number was not a house number (nothing matched by prefix). Retry with the
 		// whole query as free text so a cadastral ref like '2251500' or 'callosilla 22' still lands.
-		groups = collectGroups(tokenize(query), '')
+		groups = collectGroups(tokens, '')
+	}
+	return { groups, nameTokens }
+}
+
+function localSearch(query) {
+	const tokens = tokenize(query)
+	if (!tokens.length) return { local: [], groups: [] }
+	// The query as typed always goes first and alone: label words are only dropped when it found nothing
+	// at all, in own addresses and official places alike, so a search that already worked never changes
+	const attempts = [tokens].concat(relaxedTokenSets(tokens))
+	let local = []
+	let found = { groups: [], nameTokens: [] }
+	for (let i = 0; i < attempts.length && !local.length && !found.groups.length; i++) {
+		const wanted = attempts[i]
+		local = state.addresses.filter(a => haystackMatches(state.ownHay.get(a.id) || '', wanted))
+		found = groupsForTokens(wanted)
 	}
 	// Exact normalized-partida match first, then most matches, then alphabetical
-	const exact = normalize(nameTokens.join(' '))
-	groups.sort(
+	const exact = normalize(found.nameTokens.join(' '))
+	found.groups.sort(
 		(a, b) =>
 			(normalize(b.partida) === exact) - (normalize(a.partida) === exact) ||
 			b.places.length - a.places.length ||
 			a.partida.localeCompare(b.partida, 'es')
 	)
-	return groups.slice(0, CONFIG.dataset.resultLimit)
+	return {
+		local: local.slice(0, CONFIG.search.localLimit),
+		groups: found.groups.slice(0, CONFIG.dataset.resultLimit)
+	}
 }
 
 function cancelPendingSearch() {
@@ -162,7 +212,14 @@ function onSearchInput() {
 		showPartidaBrowser()
 		return
 	}
-	renderResults(localMatches(query), datasetGroupMatches(query), null)
+	const { local, groups } = localSearch(query)
+	// Only the type word ('partida') and nothing called that: the driver is asking for the list of them
+	const hasPlaces = activeTowns().some(town => (state.places.get(town) || []).length > 0)
+	if (!local.length && !groups.length && hasPlaces && isOnlyLabelNoise(query)) {
+		showPartidaBrowser()
+		return
+	}
+	renderResults(local, groups, null)
 	if (query.length >= CONFIG.search.minQueryLength) {
 		searchTimer = setTimeout(() => runRemoteSearch(query), CONFIG.search.debounceMs)
 	}
@@ -183,8 +240,7 @@ function runRemoteSearch(query) {
 }
 
 function showRemoteOutcome(query, remote) {
-	const local = localMatches(query)
-	const groups = datasetGroupMatches(query)
+	const { local, groups } = localSearch(query)
 	if (state.partidaReturn) {
 		// The driver is inside a partida picking a number: keep that view, the answer waits behind "back"
 		state.lastSearch = { local, groups, remote }
