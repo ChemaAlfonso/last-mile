@@ -63,6 +63,9 @@ const CONFIG = {
 		offRouteM: 35,
 		// Consecutive off-route fixes before a recompute fires (debounces GPS jitter)
 		offRouteFixes: 2,
+		// Houses sit off the road graph: once a recompute cannot bring the route under the driver (farm
+		// track, yard), stay quiet until they are back on the route or have moved this far
+		offRouteRetryM: 100,
 		// Within this distance of the destination, switch to the arrive state
 		arriveM: 30,
 		// Dashed off-road legs (you -> road, road -> door) are "no guidance here" territory: painted in

@@ -330,6 +330,8 @@ function loadGraphState() {
 				state.graphInstalled = true
 				state.graphText = rec.text
 				state.graphMeta = { size: rec.size, installedAt: rec.installedAt, version: rec.version || 1 }
+				// The address list may have painted before this read finished, without its offline-route button
+				if (state.addresses.length) renderList()
 			} else {
 				state.graphInstalled = false
 			}
@@ -395,6 +397,7 @@ function fetchAndStoreGraph(src) {
 			state.graphMeta = { size: record.size, installedAt: record.installedAt, version: record.version }
 			// Refresh the towns list so the "Actualizar todo" control (driven by graphNeeded) updates
 			renderDatos()
+			renderList()
 			return true
 		})
 		.catch(err => {
@@ -414,6 +417,7 @@ function deleteGraphBlob() {
 			state.graphInstalled = false
 			state.graphText = null
 			state.graphMeta = null
+			renderList()
 		})
 		.catch(err => console.error('routing graph delete failed', err))
 }
@@ -444,7 +448,7 @@ function savedPopupHtml(record) {
 
 function addMarker(record) {
 	const marker = L.marker([record.lat, record.lng], { icon: pinIcon() }).addTo(map)
-	marker.bindPopup(savedPopupHtml(record))
+	marker.bindPopup(() => savedPopupHtml(record))
 	marker.on('popupopen', ev => bindSavedPopup(ev.popup, record))
 	state.markers.set(record.id, marker)
 }
@@ -663,7 +667,7 @@ function renderDatasetDots(silentHint) {
 				// point lands where the driver tapped (even right next to an existing dot)
 				interactive: !state.placementMode
 			})
-			marker.bindPopup(placePopupHtml(place))
+			marker.bindPopup(() => placePopupHtml(place))
 			marker.on('popupopen', ev => bindPlacePopup(ev.popup, place))
 			state.datasetGroup.addLayer(marker)
 			state.placeMarkers.set(place.id, marker)
@@ -847,9 +851,13 @@ function proceedNavigation(d) {
 	map.closePopup()
 	enterNavUi()
 	setNavBannerBusy('Obteniendo tu ubicación…')
+	const requestId = ++state.navRequestId
 	navigator.geolocation.getCurrentPosition(
-		pos => beginNavigation(d, pos.coords),
+		pos => {
+			if (requestId === state.navRequestId) beginNavigation(d, pos.coords)
+		},
 		err => {
+			if (requestId !== state.navRequestId) return
 			handleGeoError(err)
 			exitNavUi()
 		},
@@ -888,6 +896,7 @@ function beginNavigation(dest, coords) {
 		watchId: null,
 		wakeLock: null,
 		offRouteCount: 0,
+		offRouteHold: null,
 		pointIndex: 0,
 		arrived: false
 	}
@@ -929,17 +938,28 @@ function beginNavigation(dest, coords) {
 function prepareGraph() {
 	// Lazily JSON.parse + index the stored graph on first navigation; keep it in memory afterwards
 	if (typeof initRoutingGraph === 'undefined' || typeof routingReady === 'undefined') return Promise.resolve(false)
-	if (routingReady()) return Promise.resolve(true)
-	if (!state.graphText) return Promise.resolve(false)
+	const version = state.graphMeta ? state.graphMeta.version : null
+	if (routingReady() && state.graphLoadedVersion === version) {
+		state.graphText = null
+		return Promise.resolve(true)
+	}
+	// No text to load: whatever the engine already holds (if anything) is the best available
+	if (!state.graphText) return Promise.resolve(routingReady())
 	return new Promise(resolve => {
 		// Defer so the busy banner paints before the main thread blocks on parse/index
 		setTimeout(() => {
 			try {
 				initRoutingGraph(JSON.parse(state.graphText))
+				if (routingReady()) {
+					state.graphLoadedVersion = version
+					// The engine keeps its own typed arrays; the raw text is ~7 MB of dead weight from here on
+					state.graphText = null
+				}
 				resolve(routingReady())
 			} catch (err) {
 				console.error('routing graph init failed', err)
-				resolve(false)
+				// A rejected file leaves the previously indexed graph usable
+				resolve(routingReady())
 			}
 		}, 32)
 	})
@@ -1103,16 +1123,24 @@ function onNavPosition(coords) {
 		return
 	}
 	if (near.distM > CONFIG.routing.offRouteM) {
-		nav.offRouteCount++
-		if (nav.offRouteCount >= CONFIG.routing.offRouteFixes) {
+		if (shouldRecompute(nav, lat, lng)) {
 			recomputeRoute(lat, lng)
 			return
 		}
 	} else {
 		nav.offRouteCount = 0
+		nav.offRouteHold = null
 	}
 	nav.pointIndex = near.pointIndex
 	updateGuidance(near.pointIndex)
+}
+
+function shouldRecompute(nav, lat, lng) {
+	if (nav.offRouteHold) {
+		return haversineM(nav.offRouteHold.lat, nav.offRouteHold.lng, lat, lng) >= CONFIG.routing.offRouteRetryM
+	}
+	nav.offRouteCount++
+	return nav.offRouteCount >= CONFIG.routing.offRouteFixes
 }
 
 function recomputeRoute(lat, lng) {
@@ -1124,22 +1152,26 @@ function recomputeRoute(lat, lng) {
 	const route = computeRoute(lat, lng, nav.dest.lat, nav.dest.lng)
 	if (!route || !route.points || !route.points.length) {
 		// Keep the previous route on screen; a later fix may snap back or recompute successfully
+		nav.offRouteHold = { lat, lng }
 		return
 	}
 	nav.origin = { lat, lng }
 	nav.route = route
-	nav.pointIndex = 0
 	clearNavLayers()
 	drawRoute(route, nav.dest)
 	ensureNavDriverMarker(lat, lng)
-	updateGuidance(0)
+	const near = nearestOnRoute(route, lat, lng)
+	// Still off the new route: no road passes here, so another recompute would return the same answer
+	nav.offRouteHold = near.distM > CONFIG.routing.offRouteM ? { lat, lng } : null
+	nav.pointIndex = near.pointIndex
+	updateGuidance(near.pointIndex)
 }
 
 function upcomingStep(steps, pointIndex) {
-	// Steps whose `at` is at/behind the driver are done; the next maneuver is the first real turn ahead
+	// pointIndex is the start of the segment the driver is on, so a step AT that point is already behind
 	for (let i = 0; i < steps.length; i++) {
 		if (steps[i].type === 'depart') continue
-		if (Number(steps[i].at) >= pointIndex) return steps[i]
+		if (steps[i].type === 'arrive' || Number(steps[i].at) > pointIndex) return steps[i]
 	}
 	return null
 }
@@ -1159,7 +1191,7 @@ function pendingTurnCount(steps, pointIndex) {
 	let n = 0
 	for (let i = 0; i < steps.length; i++) {
 		if (steps[i].type === 'depart' || steps[i].type === 'arrive') continue
-		if (Number(steps[i].at) >= pointIndex) n++
+		if (Number(steps[i].at) > pointIndex) n++
 	}
 	return n
 }
@@ -1292,6 +1324,8 @@ function releaseWakeLock() {
 }
 
 function stopNavigation() {
+	// Invalidates a location request still pending, so its late answer cannot start a route
+	state.navRequestId++
 	const nav = state.navigation
 	if (!nav) {
 		exitNavUi()

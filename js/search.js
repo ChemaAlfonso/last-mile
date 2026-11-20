@@ -155,6 +155,7 @@ function cancelPendingSearch() {
 
 function onSearchInput() {
 	const query = el.searchInput.value.trim()
+	state.partidaReturn = null
 	el.searchClear.hidden = query.length === 0
 	cancelPendingSearch()
 	if (!query) {
@@ -173,12 +174,23 @@ function runRemoteSearch(query) {
 	searchRemote(query, controller.signal)
 		.then(remote => {
 			if (controller.signal.aborted) return
-			renderResults(localMatches(query), datasetGroupMatches(query), remote)
+			showRemoteOutcome(query, remote)
 		})
 		.catch(err => {
 			if (err.name === 'AbortError') return
-			renderResults(localMatches(query), datasetGroupMatches(query), 'offline')
+			showRemoteOutcome(query, 'offline')
 		})
+}
+
+function showRemoteOutcome(query, remote) {
+	const local = localMatches(query)
+	const groups = datasetGroupMatches(query)
+	if (state.partidaReturn) {
+		// The driver is inside a partida picking a number: keep that view, the answer waits behind "back"
+		state.lastSearch = { local, groups, remote }
+		return
+	}
+	renderResults(local, groups, remote)
 }
 
 function renderResults(local, groups, remote) {
@@ -284,6 +296,7 @@ function showRemoteMarker(lat, lng, name, sub) {
 function hideResults() {
 	// A remote search still in flight would re-render and reopen the panel the driver just closed
 	cancelPendingSearch()
+	state.partidaReturn = null
 	el.results.hidden = true
 	el.results.innerHTML = ''
 }

@@ -1577,7 +1577,7 @@ button {
 }
 
 .nav--busy .nav__foot {
-	display: none;
+	justify-content: flex-end;
 }
 
 /* Disclaimer "don't show again" row */

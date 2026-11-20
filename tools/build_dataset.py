@@ -511,7 +511,6 @@ def parse_gml(gml_bytes):
 	"""
 	thoroughfare_names = {}
 	addresses = []
-	srs_checked = False
 
 	# iterparse over the byte stream; ThoroughfareName elements appear after Addresses,
 	# so we resolve the thoroughfare reference in a second pass below.
@@ -527,9 +526,7 @@ def parse_gml(gml_bytes):
 		elif name == 'Address':
 			addr = _parse_address(elem)
 			if addr is not None:
-				if not srs_checked:
-					_check_srs(elem)
-					srs_checked = True
+				_check_srs(elem)
 				addresses.append(addr)
 			elem.clear()
 	return thoroughfare_names, addresses
@@ -813,11 +810,18 @@ def write_outputs(town_id, town_name, dataset):
 
 
 def main(argv):
-	args = [a for a in argv[1:] if not a.startswith('--')]
+	args = []
 	gml_flag = None
-	for i, a in enumerate(argv):
-		if a == '--gml' and i + 1 < len(argv):
-			gml_flag = argv[i + 1]
+	rest = argv[1:]
+	i = 0
+	while i < len(rest):
+		if rest[i] == '--gml' and i + 1 < len(rest):
+			gml_flag = rest[i + 1]
+			i += 2
+			continue
+		if not rest[i].startswith('--'):
+			args.append(rest[i])
+		i += 1
 
 	if len(args) < 3:
 		print(__doc__)

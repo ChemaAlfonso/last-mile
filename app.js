@@ -43,6 +43,9 @@ const state = {
 	graphFailed: false,
 	// Active offline navigation session, or null when not navigating
 	navigation: null,
+	// Version of the graph currently indexed by the routing engine, or null when none is
+	graphLoadedVersion: null,
+	navRequestId: 0,
 	// Destination stashed while the first-use routing disclaimer waits for Entendido
 	pendingNavDest: null
 }
