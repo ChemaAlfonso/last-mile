@@ -704,8 +704,21 @@ function requestPersistentStorage() {
 
 function registerServiceWorker() {
 	if (!('serviceWorker' in navigator)) return
+	// Cache-first shell: a driver still on the splash is reloaded into a new version, never one already working
+	const hadController = !!navigator.serviceWorker.controller
+	navigator.serviceWorker.addEventListener('controllerchange', () => {
+		if (hadController && !appStarted) window.location.reload()
+	})
 	window.addEventListener('load', () => {
-		navigator.serviceWorker.register('sw.js').catch(err => console.error(err))
+		navigator.serviceWorker
+			.register('sw.js')
+			.then(registration => {
+				// An installed app resumed from the background never navigates, so it would never look for a deploy
+				document.addEventListener('visibilitychange', () => {
+					if (document.visibilityState === 'visible') registration.update().catch(() => {})
+				})
+			})
+			.catch(err => console.error(err))
 	})
 }
 

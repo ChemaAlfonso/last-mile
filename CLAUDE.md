@@ -37,6 +37,8 @@ Datasets in `data/*.json` are NOT precached by the service worker (`sw.js` delib
 1. Local (own addresses + in-memory dataset places) synchronously.
 2. Remote Nominatim after `search.debounceMs` (700ms) and `minQueryLength` (3) — these values are non-negotiable per Nominatim usage policy. Do not lower them.
 
+`localSearch(query)` tries the query as typed first; only when that finds nothing in own addresses AND official places does it retry without the words a parcel label adds (`partida`, `pda`, `camino`, `nº`, articles… — `relaxedTokenSets`, least aggressive first). A search that already worked must never change: keep that order. A query made only of those words (`partida`) shows the partida browser and skips Nominatim.
+
 Dataset matching iterates `activeTowns()` (downloaded AND visible). Each place carries a pre-normalized `hay` string (see `makeMemPlace`) to make token matching accent-insensitive without re-normalizing on every keystroke.
 
 ### Map rendering at scale
@@ -71,7 +73,7 @@ Three pieces with frozen seams. (1) **Engine** `js/routing.js`: a self-contained
 
 ### Service worker cache strategy
 
-`sw.js` is network-first with cache fallback on the app shell only. Bump `CACHE_VERSION` when the shell changes to force a clean precache. Never add `data/` files to `SHELL` — datasets live in IndexedDB and have their own offline path.
+`sw.js` is cache-first on the app shell only: the app opens from what is on the phone and never waits for the network (weak rural coverage used to leave it loading). **A deploy reaches drivers only through a `CACHE_VERSION` bump** — without it the shipped change is never seen. The new worker precaches the whole shell at once (never mixing files of two versions) and takes over; a driver still on the splash is reloaded into it (`controllerchange` in `initShell`), one already working gets it on the next open. A `SHELL` path that 404s makes the install fail silently and pins every driver to the old version: after each deploy, check that every `SHELL` path answers 200. Never add `data/` files to `SHELL` — datasets live in IndexedDB and have their own offline path.
 
 ## Conventions specific to this repo
 

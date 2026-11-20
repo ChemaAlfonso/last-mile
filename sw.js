@@ -1,13 +1,11 @@
 /* ============================================================
    Last Mile — service worker
-   Network-first with cache fallback so deploys are picked up on
-   the next online load (no stale-version zombies). Bump CACHE_VERSION
-   to force a clean precache.
+   Cache-first on the app shell. Bump CACHE_VERSION on every deploy.
    ============================================================ */
 
 'use strict'
 
-const CACHE_VERSION = 'last-mile-v12'
+const CACHE_VERSION = 'last-mile-v13'
 
 // The app shell. Datasets under data/ (incl. the offline basemap .pmtiles) are NOT precached:
 // they live in IndexedDB and the app owns their offline path. Vendored libraries (Leaflet, the
@@ -44,7 +42,8 @@ self.addEventListener('install', event => {
 	event.waitUntil(
 		caches
 			.open(CACHE_VERSION)
-			.then(cache => cache.addAll(SHELL))
+			// 'no-cache' revalidates each file with the server: never an old copy, and a retry only downloads what changed
+			.then(cache => cache.addAll(SHELL.map(path => new Request(path, { cache: 'no-cache' }))))
 			.then(() => self.skipWaiting())
 	)
 })
@@ -69,25 +68,14 @@ self.addEventListener('fetch', event => {
 	// The offline basemap is a large blob the app stores in IndexedDB; never precache or intercept it
 	// (Range requests, big payload) even if it were ever served from outside data/
 	if (url.pathname.endsWith('.pmtiles')) return
-	event.respondWith(networkFirst(request))
+	event.respondWith(cacheFirst(request))
 })
 
-function networkFirst(request) {
-	return fetch(request)
-		.then(response => {
-			// Refresh the cache on every successful load so the next offline visit is current
-			if (response && response.ok) {
-				const copy = response.clone()
-				caches.open(CACHE_VERSION).then(cache => cache.put(request, copy))
-			}
-			return response
-		})
-		.catch(() =>
-			caches.match(request).then(cached => {
-				if (cached) return cached
-				// Navigations fall back to the cached shell so the app boots offline
-				if (request.mode === 'navigate') return caches.match('index.html')
-				return Response.error()
-			})
-		)
+function cacheFirst(request) {
+	// Any navigation is the app itself, whatever query string the launcher adds
+	const key = request.mode === 'navigate' ? 'index.html' : request
+	return caches
+		.open(CACHE_VERSION)
+		.then(cache => cache.match(key))
+		.then(cached => cached || fetch(request))
 }
