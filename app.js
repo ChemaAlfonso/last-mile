@@ -690,6 +690,15 @@ function fallbackCopyShareUrl() {
 	}
 }
 
+function requestPersistentStorage() {
+	// The driver's own points exist only in this browser's storage; without this the browser may
+	// evict them under disk pressure. Best effort: a refusal changes nothing
+	if (!navigator.storage || typeof navigator.storage.persist !== 'function') return
+	const ask = () => navigator.storage.persist()
+	const alreadyGranted = typeof navigator.storage.persisted === 'function' ? navigator.storage.persisted() : Promise.resolve(false)
+	alreadyGranted.then(granted => granted || ask()).catch(() => {})
+}
+
 function registerServiceWorker() {
 	if (!('serviceWorker' in navigator)) return
 	window.addEventListener('load', () => {
@@ -712,6 +721,7 @@ function hideSplash() {
 // App: the heavy init, run once when the splash is dismissed
 function initApp() {
 	state.settings = loadSettings()
+	requestPersistentStorage()
 	initMap()
 	bindEvents()
 	// Read the stored basemap (if any) and switch to the offline vector layer -- read-only,

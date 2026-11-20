@@ -159,6 +159,12 @@ function basemapSource() {
 	}
 }
 
+function expectedDownloadBytes(declaredSize, contentLength, fallbackBytes) {
+	// The manifest size is the only figure that matches the decoded byte count when the server
+	// compresses the response (Content-Length is then the compressed size, or absent)
+	return [declaredSize, contentLength, fallbackBytes].find(n => Number(n) > 0) || 0
+}
+
 function hasAnyTown() {
 	return Object.keys(state.settings.towns).length > 0
 }
@@ -226,11 +232,10 @@ function fetchAndStoreBasemap(src) {
 			return pump().then(() => ({ blob: new Blob(chunks, { type: 'application/octet-stream' }), total, received }))
 		})
 		.then(({ blob, total, received }) => {
-			// Never mark a truncated download installed: require the full Content-Length (or, when the
-			// server sends none, at least ~the expected size)
+			// Never mark a truncated download installed
 			const got = received != null ? received : blob.size
-			const target = total || CONFIG.basemap.expectedBytes
-			if (got < Math.floor(target * 0.98)) throw new Error('incomplete-download')
+			const target = expectedDownloadBytes(src.size, total, CONFIG.basemap.expectedBytes)
+			if (got < Math.floor(target * CONFIG.basemap.minCompleteRatio)) throw new Error('incomplete-download')
 			const record = {
 				id: CONFIG.basemap.id,
 				blob,
@@ -370,10 +375,9 @@ function fetchAndStoreGraph(src) {
 			return pump().then(() => ({ text, total, received }))
 		})
 		.then(({ text, total, received }) => {
-			// Never mark a truncated download installed: require the full Content-Length (or, when the
-			// server sends none, at least ~the expected size). Byte count is what the manifest declares.
+			// Never mark a truncated download installed
 			const bytes = received != null ? received : new Blob([text]).size
-			const target = total || CONFIG.routing.expectedBytes
+			const target = expectedDownloadBytes(src.size, total, CONFIG.routing.expectedBytes)
 			if (bytes < Math.floor(target * CONFIG.routing.minCompleteRatio)) throw new Error('incomplete-download')
 			const record = {
 				id: CONFIG.routing.id,

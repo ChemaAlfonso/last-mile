@@ -39,7 +39,9 @@ whenever any declared version is newer than what their device stores.
 5. **Bump versions in `data/index.json`**: town versions are already handled by
    the builder; raise `basemap.version` and `graph.version` by 1 and update each
    `size` to the new byte counts (`wc -c` on the files). If you skip this, users
-   who already installed them will never refresh.
+   who already installed them will never refresh. `size` is also what the app
+   checks a finished download against: a stale value larger than the real file
+   makes every download be rejected as truncated.
 6. **Deploy** (`npm run deploy-lastmile` from epic-server). `data/` travels with
    the rsync; nothing else to configure — nginx gzips the graph JSON on the fly.
 

@@ -1,10 +1,12 @@
 /* ---------- db ---------- */
 
 let dbInstance = null
+let dbOpening = null
 
 function openDb() {
-	return new Promise((resolve, reject) => {
-		if (dbInstance) return resolve(dbInstance)
+	if (dbInstance) return Promise.resolve(dbInstance)
+	if (dbOpening) return dbOpening
+	const opening = new Promise((resolve, reject) => {
 		const req = indexedDB.open(CONFIG.db.name, CONFIG.db.version)
 		req.onupgradeneeded = () => {
 			const db = req.result
@@ -26,11 +28,30 @@ function openDb() {
 			}
 		}
 		req.onsuccess = () => {
-			dbInstance = req.result
-			resolve(dbInstance)
+			const db = req.result
+			// A newer shell open elsewhere (installed app + browser tab) cannot upgrade the schema while
+			// this connection stays open: release it, the next operation reopens
+			db.onversionchange = () => {
+				db.close()
+				if (dbInstance === db) dbInstance = null
+			}
+			// The browser can also drop the connection by itself (site data cleared, storage failure)
+			db.onclose = () => {
+				if (dbInstance === db) dbInstance = null
+			}
+			dbInstance = db
+			resolve(db)
 		}
+		// No onblocked handler on purpose: blocked is not final, the request succeeds as soon as the
+		// other connection closes, and failing here would boot the app with an empty list
 		req.onerror = () => reject(req.error)
 	})
+	const release = () => {
+		if (dbOpening === opening) dbOpening = null
+	}
+	opening.then(release, release)
+	dbOpening = opening
+	return opening
 }
 
 function dbStore(storeName, mode) {
@@ -59,41 +80,33 @@ function dbGet(storeName, id) {
 	)
 }
 
-function dbPut(storeName, record) {
-	return dbStore(storeName, 'readwrite').then(
-		store =>
-			new Promise((resolve, reject) => {
-				const req = store.put(record)
-				req.onsuccess = () => resolve(record)
-				req.onerror = () => reject(req.error)
-			})
-	)
-}
-
-function dbDelete(storeName, id) {
-	return dbStore(storeName, 'readwrite').then(
-		store =>
-			new Promise((resolve, reject) => {
-				const req = store.delete(id)
-				req.onsuccess = () => resolve()
-				req.onerror = () => reject(req.error)
-			})
-	)
-}
-
-function dbBulkPut(storeName, records) {
-	// One transaction for all puts -- thousands of individual transactions would be too slow
+function dbWrite(storeName, work) {
+	// Settles on the transaction, not on the request: a commit can still abort (quota) after a
+	// request reported success, and that write must not be announced as saved
 	return openDb().then(
 		db =>
 			new Promise((resolve, reject) => {
 				const tx = db.transaction(storeName, 'readwrite')
-				const store = tx.objectStore(storeName)
-				records.forEach(record => store.put(record))
-				tx.oncomplete = () => resolve(records.length)
-				tx.onerror = () => reject(tx.error)
+				tx.oncomplete = () => resolve()
+				// A failed request bubbles here before the transaction records its own error
+				tx.onerror = event => reject(tx.error || event.target.error)
 				tx.onabort = () => reject(tx.error)
+				work(tx.objectStore(storeName))
 			})
 	)
+}
+
+function dbPut(storeName, record) {
+	return dbWrite(storeName, store => store.put(record)).then(() => record)
+}
+
+function dbDelete(storeName, id) {
+	return dbWrite(storeName, store => store.delete(id))
+}
+
+function dbBulkPut(storeName, records) {
+	// One transaction for all puts -- thousands of individual transactions would be too slow
+	return dbWrite(storeName, store => records.forEach(record => store.put(record))).then(() => records.length)
 }
 
 function dbGetAllByTown(town) {

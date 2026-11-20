@@ -24,11 +24,11 @@ const CONFIG = {
 		// Bump (or override via manifest.basemap.version) to make installed copies refresh through
 		// the normal town download/update flow -- the basemap is invisible to the driver.
 		version: 1,
-		// Coarse floor used only when the server sends no Content-Length: reject a blob far smaller
-		// than the real basemap (~25 MB). The precise check uses the server's Content-Length.
+		// Coarse floor used only when neither the manifest nor the server declares a size: reject a
+		// blob far smaller than the real basemap (~25 MB).
 		expectedBytes: 20 * 1024 * 1024,
 		// A truncated download must never be accepted: require at least this fraction of the
-		// server-reported Content-Length before marking the basemap installed.
+		// declared size before marking the basemap installed.
 		minCompleteRatio: 0.98,
 		// protomaps-leaflet built-in flavor closest to the app's light look
 		flavor: 'light',
@@ -53,11 +53,11 @@ const CONFIG = {
 		// town download/update flow -- the routing graph is invisible to the driver, like the basemap.
 		// v2 carries OSM turn restrictions.
 		version: 2,
-		// Coarse floor used only when the server sends no Content-Length: reject a blob far smaller than
-		// the real graph (~7 MB). The precise check uses the server's Content-Length.
+		// Coarse floor used only when neither the manifest nor the server declares a size: reject a
+		// blob far smaller than the real graph (~7 MB).
 		expectedBytes: 5 * 1024 * 1024,
 		// A truncated download must never be accepted: require at least this fraction of the
-		// server-reported Content-Length before marking the graph installed.
+		// declared size before marking the graph installed.
 		minCompleteRatio: 0.98,
 		// Live navigation tunables (metres unless noted)
 		offRouteM: 35,
