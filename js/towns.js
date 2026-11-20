@@ -20,11 +20,39 @@ function findPlaceById(id) {
 	return null
 }
 
+function sameNumberGroups(town) {
+	// Catastro reuses a number for different houses of a partida (distant ones, or one per cadastral
+	// GP fragment): each is its own place
+	const groups = new Map()
+	;(state.places.get(town) || []).forEach(place => {
+		// A retired record is the driver's own correction of a point Catastro no longer lists, not a house
+		if (isSinNumero(place.num) || place.retired) return
+		const key = place.partida + '\n' + place.num
+		const houses = groups.get(key)
+		if (houses) houses.push(place)
+		else groups.set(key, [place])
+	})
+	groups.forEach(houses => houses.sort((a, b) => a.id.localeCompare(b.id)))
+	return groups
+}
+
+function sameNumberPosition(place, groups) {
+	// groups: pass sameNumberGroups(town) when asking for many places at once
+	if (isSinNumero(place.num)) return null
+	const houses = (groups || sameNumberGroups(place.town)).get(place.partida + '\n' + place.num) || []
+	// By id: popups and open result lists keep place objects that an update or an import has since replaced
+	const at = houses.findIndex(house => house.id === place.id)
+	if (houses.length < 2 || at === -1) return null
+	return { index: at + 1, total: houses.length, next: houses[(at + 1) % houses.length] }
+}
+
 function placeSubtitle(place) {
 	// A user-set address wins; otherwise show the cadastral ref (the real-world id for S/N places).
 	// A refless S/N point still reads as "Casa sin número" so it is never a cryptic bare 'S/N'.
 	// Zones carry their own type word, so no 'Partida' prefix.
 	if (place.address) return place.address
+	const shared = sameNumberPosition(place)
+	if (shared) return `Hay ${shared.total} casas con el nº ${place.num} · esta es la ${shared.index} de ${shared.total}`
 	if (place.ref) return String(place.ref)
 	if (isSinNumero(place.num)) return `Casa sin número · ${townLabel(place.town)}`
 	return `${townLabel(place.town)} · Catastro`
@@ -50,6 +78,7 @@ function makeMemPlace(record) {
 		address: record.address || '',
 		notes: record.notes || '',
 		edited: !!record.edited,
+		retired: !!record.retired,
 		updatedAt: record.updatedAt || null,
 		ref: record.ref || '',
 		hay: placeHaystack(record)
@@ -73,6 +102,7 @@ function toDbPlace(place) {
 		record.edited = true
 		record.updatedAt = place.updatedAt
 	}
+	if (place.retired) record.retired = true
 	return record
 }
 
@@ -124,7 +154,19 @@ function importTownData(townId, data) {
 	// Replace the town's catalog wholesale so places removed upstream don't linger,
 	// but preserve edited records: never overwrite ids the driver has corrected on this device
 	return dbGetAllByTown(townId).then(existing => {
-		const keptIds = new Set(existing.filter(r => r.edited).map(r => r.id))
+		const kept = existing.filter(r => r.edited)
+		const keptIds = new Set(kept.map(r => r.id))
+		const listedIds = new Set(data.places.map(p => `${townId}/${p.id}`))
+		// An edited record the dataset no longer lists stays (the driver's work), marked so it is not
+		// counted as one more official house; the mark is dropped if the id ever comes back
+		const remarked = kept
+			.filter(r => !!r.retired === listedIds.has(r.id))
+			.map(r => {
+				const copy = Object.assign({}, r)
+				if (listedIds.has(r.id)) delete copy.retired
+				else copy.retired = true
+				return copy
+			})
 		const records = data.places
 			.map(p => {
 				const r = {
@@ -136,13 +178,13 @@ function importTownData(townId, data) {
 					lat: p.lat,
 					lng: p.lng
 				}
-				// Optional cadastral ref (only present on S/N places); omit when absent
+				// Optional cadastral ref (S/N places, and numbered ones sharing their number); omit when absent
 				if (p.ref) r.ref = p.ref
 				return r
 			})
 			.filter(r => !keptIds.has(r.id))
 		return dbDeleteByTown(townId, true)
-			.then(() => dbBulkPut(CONFIG.db.placesStore, records))
+			.then(() => dbBulkPut(CONFIG.db.placesStore, records.concat(remarked)))
 			.then(() => dbGetAllByTown(townId))
 			.then(all => {
 				state.places.set(townId, all.map(makeMemPlace))
@@ -364,6 +406,7 @@ function importPlaceEdits(edits) {
 			address: typeof e.address === 'string' ? e.address : '',
 			notes: typeof e.notes === 'string' ? e.notes : '',
 			edited: true,
+			retired: e.retired === true,
 			updatedAt: typeof e.updatedAt === 'string' ? e.updatedAt : new Date().toISOString()
 		})
 	})
@@ -380,6 +423,12 @@ function importPlaceEdits(edits) {
 				return true
 			})
 			if (!toApply.length) return { added: 0, conflicts, invalid }
+			toApply.forEach(record => {
+				// An edit of a point this device's dataset does not list (older backup): same mark as on update
+				const loaded = state.places.get(record.town)
+				if (loaded) record.retired = !loaded.some(p => p.id === record.id)
+				if (!record.retired) delete record.retired
+			})
 			return dbBulkPut(CONFIG.db.placesStore, toApply).then(() => {
 				toApply.forEach(record => {
 					if (!state.places.has(record.town)) return

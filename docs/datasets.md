@@ -73,6 +73,31 @@ The owner's framing — emit the address a resident would actually use:
 
 **(a) Numbered** — no ambiguity. `id = {legacy-zone-slug}-{number}`, `name = "Zone, N"`, no `ref`.
 
+**(a2) Numbered, number reused for distant houses** — Catastro reuses one number inside a zone for
+houses hundreds of metres or kilometres apart (419 ids across the ten towns, 297 of them in
+Orihuela, when this was introduced). Addresses sharing zone + number are clustered by the 150 m
+single-link rule (`MERGE_DISTANCE_METRES`): one cluster stays tier (a), averaged and byte-identical;
+several clusters become one place each, on its own house. Each gets
+`id = {legacy-zone-slug}-{number}-{parcel-ref}` (plus the 1 m grid cell when two clusters share the
+ref), keeps `name = "Zone, N"` and carries `ref` so the driver can tell the houses apart. The plain
+`{legacy-zone-slug}-{number}` id is **retired** for a split number: it stood for the midpoint, where
+no house is. Never average these back together.
+
+Known limits of (a2), accepted on purpose:
+
+- **Chained clusters stay one place.** The rule is single link, so a row of dwellings sharing a
+  number, each within 150 m of the next, is one averaged place even when the row is longer than
+  150 m (Catral `camino-arroba-hornos`: 18 address points per number over 260 m). They are one
+  group of houses; a place per dwelling with the same number would not help the driver.
+- **A split id can change in a later rebuild** when Catastro adds or removes an address with a
+  smaller parcel ref in that cluster, shifts a cluster that needs the grid cell, moves two clusters
+  across the 150 m line, or adds a distant duplicate to a number that was a single house (its plain
+  id is then retired). The driver's edit is never lost (edited records survive updates); the new
+  place appears next to it, and the app marks the kept record `retired` so it is not counted as
+  one more house with that number.
+- The app does not rely on `ref` to explain repeated numbers: it counts the numbered places that
+  share partida + number, which also covers the cadastral GP fragments (Albatera "El Moco, 1").
+
 **(b) S/N with a rural parcel ref** — `localId` ends in `...S-N.03059A02000295` → rural cadastral
 ref (municipality + sector letter + 3-digit polígono + 5-digit parcela). Emitted as
 `"ref": "Políg. 20 · Parc. 295"` (leading zeros stripped). This IS how rural addresses are written.
@@ -156,7 +181,8 @@ Place ids are the key under which drivers' edits (`placeEdits`) are stored. **Id
   output) — it silently re-keys every place.
 - **Never derive S/N ids from enumeration order** — they must come from the parcel ref / coordinates.
 - **Never add the display name-fixes to the legacy cleaner.**
-- **Never `ref` a numbered place** (tier a stays byte-identical).
+- **Never `ref` a tier (a) place** (it stays byte-identical). Only tier (a2), a number split across
+  distant houses, carries one.
 
 ### Pre-ship verification checklist
 Diff the new `data/<town>.json` against the previously shipped one, per town:
@@ -165,8 +191,11 @@ Diff the new `data/<town>.json` against the previously shipped one, per town:
       `san-antonio-florida-*` duplicates); list any.
 - [ ] **0 moved coordinates** on surviving ids — except the merge survivors above.
 - [ ] **0 duplicate ids** in the output.
-- [ ] Every **added** place is a new S/N point or a justified PL/allow-list inclusion.
-- [ ] Numbered records byte-identical (no `ref`, same coords/name/id).
+- [ ] Every **added** place is a new S/N point, a justified PL/allow-list inclusion, a house of a
+      split number (tier a2, with its plain id retired), or an address Catastro added upstream.
+- [ ] When the Catastro source date changed, lost ids and moved coordinates from upstream are
+      expected: confirm with the previous builder on the same GML that the builder itself adds none.
+- [ ] Tier (a) numbered records byte-identical (no `ref`, same coords/name/id).
 - [ ] Name changes are all intended renames.
 
 ### `resolve_version`

@@ -356,7 +356,7 @@ function parcelCompact(ref) {
 	return s.replace(/^\s*ref\.?\s*/i, '').trim() || s
 }
 
-function numChipHtml(place) {
+function numChipHtml(place, shared) {
 	const num = String(place.num == null ? '' : place.num)
 	const ref = place.ref ? String(place.ref) : ''
 	if (isSinNumero(num) && ref) {
@@ -365,6 +365,13 @@ function numChipHtml(place) {
 		return (
 			`<button type="button" class="numchip numchip--ref" data-place="${escapeHtml(place.id)}" ` +
 			`title="${escapeHtml(ref)}">${escapeHtml(label)}</button>`
+		)
+	}
+	if (shared) {
+		// Two chips with the same number would look like a mistake: say which of the houses each one is
+		return (
+			`<button type="button" class="numchip" data-place="${escapeHtml(place.id)}">${escapeHtml(num)}` +
+			`<span class="numchip__position">${shared.index} de ${shared.total}</span></button>`
 		)
 	}
 	return `<button type="button" class="numchip" data-place="${escapeHtml(place.id)}">${escapeHtml(num)}</button>`
@@ -404,14 +411,16 @@ function showPartidaBrowser() {
 }
 
 function showPartidaNumbers(group) {
-	const places = group.places.slice().sort((a, b) => compareNum(a.num, b.num))
+	const places = group.places.slice().sort((a, b) => compareNum(a.num, b.num) || a.id.localeCompare(b.id))
 	// Numbered chips first; every S/N place then shows its distinguishing cadastral ref (compact)
 	// under a full-width "Sin número" heading so the ref chips read in context
 	const numbered = places.filter(p => !isSinNumero(p.num))
 	const sinNumero = places
 		.filter(p => isSinNumero(p.num))
 		.sort((a, b) => parcelCompact(a.ref).localeCompare(parcelCompact(b.ref), 'es', { numeric: true }))
-	const chipsFor = list => `<div class="results__nums">${list.map(numChipHtml).join('')}</div>`
+	const sameNumber = sameNumberGroups(group.town)
+	const chipsFor = list =>
+		`<div class="results__nums">${list.map(p => numChipHtml(p, sameNumberPosition(p, sameNumber))).join('')}</div>`
 	let body = ''
 	if (numbered.length) body += chipsFor(numbered)
 	if (sinNumero.length) {

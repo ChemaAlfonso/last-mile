@@ -580,7 +580,7 @@ def _parse_address(elem):
 
 
 def _cluster_units(zone_units):
-	"""Single-link clustering of same-(zone, number) units by MERGE_DISTANCE_METRES (UTM)."""
+	"""Single-link clustering of points that share a zone and number by MERGE_DISTANCE_METRES (UTM)."""
 	clusters = [[unit] for unit in zone_units]
 	merged = True
 	while merged:
@@ -602,9 +602,46 @@ def _clusters_close(a, b):
 	)
 
 
-def _surviving_base(cluster, legacy_totals):
+def _surviving_unit(cluster, legacy_totals):
 	"""On a merge keep the id of the larger legacy zone (the established one), tie by slug."""
-	return sorted(cluster, key=lambda u: (-legacy_totals[u['base']], u['base']))[0]['base']
+	return sorted(cluster, key=lambda u: (-legacy_totals[u['base']], u['base'], u['suffix']))[0]
+
+
+def _group_units(legacy_base, points):
+	"""Turn the addresses of one legacy zone + number into units, one per physical location.
+
+	Addresses within MERGE_DISTANCE_METRES of each other (single link) are one unit, averaged. A
+	single unit keeps the plain '{zone}-{number}' id. When the number is reused for distant houses,
+	every unit gets an id suffix anchored on its cadastral parcel ref (persistent across rebuilds,
+	like S/N ids), plus the 1 m grid cell only if two units of the group share that ref.
+	"""
+	clusters = _cluster_units([{'x': x, 'y': y, 'ref': ref} for x, y, ref in points])
+	units = []
+	for cluster in clusters:
+		n = len(cluster)
+		units.append(
+			{
+				'base': legacy_base,
+				'x': sum(p['x'] for p in cluster) / n,
+				'y': sum(p['y'] for p in cluster) / n,
+				'n': n,
+				'ref': min(p['ref'] for p in cluster),
+				'suffix': ''
+			}
+		)
+	if len(units) == 1:
+		return units
+	ref_counts = {}
+	for unit in units:
+		ref_counts[unit['ref']] = ref_counts.get(unit['ref'], 0) + 1
+	for unit in units:
+		suffix = f"-{slugify(unit['ref'])}" if unit['ref'] else ''
+		# Compromise: the cell follows the unit's centroid, so this id changes if Catastro shifts those
+		# addresses. Accepted for the few units no parcel ref can tell apart (same trade as S/N ids)
+		if not unit['ref'] or ref_counts[unit['ref']] > 1:
+			suffix += f"-{round(unit['x'] / SN_DEDUP_METRES)}-{round(unit['y'] / SN_DEDUP_METRES)}"
+		unit['suffix'] = suffix
+	return units
 
 
 def build_sn_places(sn_records):
@@ -658,7 +695,7 @@ def build(municipality_code, town_id, town_name, gml_bytes, source_date):
 	print(f'Addresses read: {len(addresses)}')
 	print(f'Thoroughfare names: {len(thoroughfare_names)}')
 
-	kept = []  # numbered: (zone, number, x, y)
+	kept = []  # numbered: (zone, legacy_base, number, x, y, parcel_ref)
 	sn_records = []  # sin-numero: (zone, x, y, parcel_ref)
 	partidas = set()
 	type_counts = {}
@@ -685,31 +722,27 @@ def build(municipality_code, town_id, town_name, gml_bytes, source_date):
 			# number. Each keeps its own position (not averaged with the rest of the zone).
 			sn_records.append((display, legacy_base, addr['x'], addr['y'], parcel_ref(addr['local_id'])))
 			continue
-		kept.append((display, legacy_base, addr['number'], addr['x'], addr['y']))
+		kept.append((display, legacy_base, addr['number'], addr['x'], addr['y'], parcel_ref(addr['local_id'])))
 		partidas.add(display)
 		type_counts[type_code] = type_counts.get(type_code, 0) + 1
 
 	print(f'Kept rural numbered addresses: {len(kept)} {type_counts}')
 	print(f'Rural S/N addresses: {len(sn_records)}')
 
-	# A "unit" is one legacy zone + number, coordinates averaged -- i.e. exactly what used to
-	# be a single shipped place. Its id stays anchored on the legacy zone slug.
-	units = {}  # (display, number, legacy_base) -> [sum_x, sum_y, n]
+	# Addresses sharing a legacy zone + number are one place only when they stand together (several
+	# buildings of one finca). Catastro also reuses a number for houses kilometres apart: averaging
+	# those put the place in the middle, where no house is, so each distant group is its own unit.
+	groups = {}  # (display, number, legacy_base) -> [(x, y, parcel_ref)]
 	legacy_totals = {}  # legacy_base -> address count, to pick the surviving id when merging
-	for display, legacy_base, number, x, y in kept:
-		bucket = units.setdefault((display, number, legacy_base), [0.0, 0.0, 0])
-		bucket[0] += x
-		bucket[1] += y
-		bucket[2] += 1
+	for display, legacy_base, number, x, y, ref in kept:
+		groups.setdefault((display, number, legacy_base), []).append((x, y, ref))
 		legacy_totals[legacy_base] = legacy_totals.get(legacy_base, 0) + 1
 
 	# Units that share a (display, number) are the same real address only when physically
 	# close; a reused number for a far-away house stays a separate place with its own id.
 	by_zone_number = {}
-	for (display, number, legacy_base), (sx, sy, n) in units.items():
-		by_zone_number.setdefault((display, number), []).append(
-			{'base': legacy_base, 'x': sx / n, 'y': sy / n, 'n': n}
-		)
+	for (display, number, legacy_base), points in groups.items():
+		by_zone_number.setdefault((display, number), []).extend(_group_units(legacy_base, points))
 
 	merge_zones = DISTANCE_MERGE_ZONES.get(municipality_code, set())
 	places = []
@@ -719,21 +752,25 @@ def build(municipality_code, town_id, town_name, gml_bytes, source_date):
 			total = sum(u['n'] for u in cluster)
 			cx = sum(u['x'] * u['n'] for u in cluster) / total
 			cy = sum(u['y'] * u['n'] for u in cluster) / total
-			base = _surviving_base(cluster, legacy_totals)
+			survivor = _surviving_unit(cluster, legacy_totals)
 			lat, lng = utm_to_wgs84(cx, cy)
-			places.append(
-				{
-					'id': f'{base}-{number}',
-					'name': f'{display}, {number}',
-					'partida': display,
-					'num': number,
-					'lat': round(lat, COORD_DECIMALS),
-					'lng': round(lng, COORD_DECIMALS)
-				}
-			)
+			place = {
+				'id': f"{survivor['base']}-{number}{survivor['suffix']}",
+				'name': f'{display}, {number}',
+				'partida': display,
+				'num': number,
+				'lat': round(lat, COORD_DECIMALS),
+				'lng': round(lng, COORD_DECIMALS)
+			}
+			# Only a split number carries a ref: it is what tells its houses apart for the driver
+			if survivor['suffix']:
+				label = parcel_ref_label(survivor['ref'])
+				if label:
+					place['ref'] = label
+			places.append(place)
 
 	places.extend(build_sn_places(sn_records))
-	places.sort(key=lambda p: (p['partida'], p['num']))
+	places.sort(key=lambda p: (p['partida'], p['num'], p['id']))
 	print(f'Deduped places: {len(places)}')
 	print(f'Partidas: {len(partidas)}')
 

@@ -688,10 +688,21 @@ function placePopupHtml(place) {
 	const notes = place.notes ? `<p class="popup__notes">${escapeHtml(place.notes)}</p>` : ''
 	const flag = place.edited ? '<span class="popup__flag">Editado</span>' : ''
 	const addrLine = placeSubtitle(place)
+	// A reused number gets its own full-width strip, not a fifth button: the driver cannot know which
+	// house is theirs, so the way to the other one must stand out from the routine actions
+	const shared = sameNumberPosition(place)
+	const sharedStrip = shared
+		? '<button type="button" class="popup__shared" data-act="otherHouse">' +
+			`<span class="popup__shared-text">Hay ${shared.total} casas con el nº ${escapeHtml(place.num)}<br>Esta es la ${shared.index} de ${shared.total}</span>` +
+			`<span class="popup__shared-go">${shared.total === 2 ? 'Ver la otra' : 'Ver la siguiente'} ›</span>` +
+			'</button>'
+		: ''
+	const addr = shared && !place.address ? (place.ref ? String(place.ref) : '') : addrLine
 	return (
 		`<div class="popup" data-id="${escapeHtml(place.id)}">` +
 		`<p class="popup__name">${escapeHtml(place.name)}${flag}</p>` +
-		`<p class="popup__addr">${escapeHtml(addrLine)}</p>` +
+		sharedStrip +
+		(addr ? `<p class="popup__addr">${escapeHtml(addr)}</p>` : '') +
 		`<p class="popup__meta">${escapeHtml(formatCoords(place.lat, place.lng))}</p>` +
 		notes +
 		'<div class="popup__actions">' +
@@ -712,7 +723,11 @@ function bindPlacePopup(popup, place) {
 			if (act === 'route') openRoute(place)
 			else if (act === 'offlineRoute') startNavigation(place)
 			else if (act === 'share') shareAddress(place)
-			else if (act === 'edit') {
+			else if (act === 'otherHouse') {
+				const shared = sameNumberPosition(place)
+				map.closePopup()
+				if (shared) focusPlace(shared.next)
+			} else if (act === 'edit') {
 				map.closePopup()
 				startEditPlace(place)
 			}
